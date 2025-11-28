@@ -1,5 +1,11 @@
 # @kawarp/core
 
+## 1.0.1
+
+### Patch Changes
+
+- acba3c6: chore: readme updates & docs
+
 ## 1.0.0
 
 ### Major Changes
