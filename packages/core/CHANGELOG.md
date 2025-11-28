@@ -1,5 +1,11 @@
 # @kawarp/core
 
+## 1.1.0
+
+### Minor Changes
+
+- 0938343: fix: ease/lerp between animationspeed changes
+
 ## 1.0.2
 
 ### Patch Changes
