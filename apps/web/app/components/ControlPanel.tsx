@@ -70,11 +70,11 @@ export function ControlPanel({
           {isOpen && (
             <motion.div
               key="panel"
-              initial={{ opacity: 0, x: 8, scale: 0.85 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 8, scale: 0.85 }}
+              initial={{ opacity: 0, x: 8, filter: "blur(8px)", scale: 0.95 }}
+              animate={{ opacity: 1, x: 0, filter: "blur(0px)", scale: 1 }}
+              exit={{ opacity: 0, x: 8, filter: "blur(8px)", scale: 0.95 }}
               transition={{ duration: 0.15 }}
-              className="w-72 rounded-2xl border border-white/5 bg-zinc-950/90 p-4 shadow-2xl backdrop-blur-md"
+              className="w-72 rounded-2xl border border-white/5 bg-zinc-950/90 p-4 shadow-2xl backdrop-blur-md origin-right"
             >
               <div className="mb-5">
                 <span className="mb-3 block text-xs text-zinc-500 font-semibold">
