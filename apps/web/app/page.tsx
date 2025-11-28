@@ -1,102 +1,114 @@
-import Image, { type ImageProps } from "next/image";
-import { Button } from "@repo/ui/button";
-import styles from "./page.module.css";
+"use client";
 
-type Props = Omit<ImageProps, "src"> & {
-  srcLight: string;
-  srcDark: string;
-};
+import { Kawarp } from "@kawarp/react";
+import { AnimatePresence, motion } from "motion/react";
+import { ControlPanel, Documentation, Footer, Header } from "./components";
+import { PRESETS } from "./constants";
+import { useKawarpDemo } from "./hooks/useKawarpDemo";
 
-const ThemeImage = (props: Props) => {
-  const { srcLight, srcDark, ...rest } = props;
-
-  return (
-    <>
-      <Image {...rest} src={srcLight} className="imgLight" />
-      <Image {...rest} src={srcDark} className="imgDark" />
-    </>
-  );
-};
+const GITHUB_URL = "https://github.com/better-lyrics/kawarp";
 
 export default function Home() {
-  return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <ThemeImage
-          className={styles.logo}
-          srcLight="turborepo-dark.svg"
-          srcDark="turborepo-light.svg"
-          alt="Turborepo logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol>
-          <li>
-            Get started by editing <code>apps/web/app/page.tsx</code>
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
+  const {
+    ref,
+    state,
+    updateState,
+    loadPreset,
+    loadFromUrl,
+    handleFile,
+    handleDrop,
+  } = useKawarpDemo();
 
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new/clone?demo-description=Learn+to+implement+a+monorepo+with+a+two+Next.js+sites+that+has+installed+three+local+packages.&demo-image=%2F%2Fimages.ctfassets.net%2Fe5382hct74si%2F4K8ZISWAzJ8X1504ca0zmC%2F0b21a1c6246add355e55816278ef54bc%2FBasic.png&demo-title=Monorepo+with+Turborepo&demo-url=https%3A%2F%2Fexamples-basic-web.vercel.sh%2F&from=templates&project-name=Monorepo+with+Turborepo&repository-name=monorepo-turborepo&repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fturborepo%2Ftree%2Fmain%2Fexamples%2Fbasic&root-directory=apps%2Fdocs&skippable-integrations=1&teamSlug=vercel&utm_source=create-turbo"
-            target="_blank"
-            rel="noopener noreferrer"
+  return (
+    <div
+      className="relative min-h-screen overflow-x-hidden"
+      onDragOver={(e) => {
+        e.preventDefault();
+        updateState("isDragging", true);
+      }}
+      onDragLeave={() => updateState("isDragging", false)}
+      onDrop={handleDrop}
+    >
+      <motion.div
+        className="fixed inset-0 -z-10"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: state.isLoaded ? 1 : 0 }}
+        transition={{ duration: 0.5 }}
+      >
+        <Kawarp
+          ref={ref}
+          src={PRESETS[0].url}
+          warpIntensity={state.warpIntensity}
+          blurPasses={state.blurPasses}
+          animationSpeed={state.animationSpeed}
+          transitionDuration={state.transitionDuration}
+          saturation={state.saturation}
+          onLoad={() => updateState("isLoaded", true)}
+          style={{ width: "100%", height: "100%" }}
+        />
+      </motion.div>
+
+      <AnimatePresence>
+        {state.isDragging && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/80 backdrop-blur-sm"
           >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            href="https://turborepo.com/docs?utm_source"
-            target="_blank"
-            rel="noopener noreferrer"
-            className={styles.secondary}
+            <motion.div
+              initial={{ scale: 0.9 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0.9 }}
+              className="rounded-2xl border-2 border-dashed border-zinc-500 px-16 py-12"
+            >
+              <p className="text-xl text-zinc-300">Drop image here</p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="relative z-10 flex flex-col">
+        <Header githubUrl={GITHUB_URL} />
+
+        <ControlPanel
+          isOpen={state.panelOpen}
+          onToggle={() => updateState("panelOpen", !state.panelOpen)}
+          onClose={() => updateState("panelOpen", false)}
+          activePreset={state.activePreset}
+          onPresetSelect={loadPreset}
+          imageUrl={state.imageUrl}
+          onImageUrlChange={(url) => updateState("imageUrl", url)}
+          onLoadFromUrl={loadFromUrl}
+          onFileSelect={handleFile}
+          warpIntensity={state.warpIntensity}
+          onWarpIntensityChange={(v) => updateState("warpIntensity", v)}
+          blurPasses={state.blurPasses}
+          onBlurPassesChange={(v) => updateState("blurPasses", v)}
+          animationSpeed={state.animationSpeed}
+          onAnimationSpeedChange={(v) => updateState("animationSpeed", v)}
+          transitionDuration={state.transitionDuration}
+          onTransitionDurationChange={(v) => updateState("transitionDuration", v)}
+          saturation={state.saturation}
+          onSaturationChange={(v) => updateState("saturation", v)}
+        />
+
+        <main className="relative flex min-h-[85vh] items-end justify-start p-6">
+          <motion.p
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3, duration: 0.3 }}
+            className="max-w-xs text-sm text-white/40"
           >
-            Read our docs
-          </a>
-        </div>
-        <Button appName="web" className={styles.secondary}>
-          Open alert
-        </Button>
-      </main>
-      <footer className={styles.footer}>
-        <a
-          href="https://vercel.com/templates?search=turborepo&utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          href="https://turborepo.com?utm_source=create-turbo"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to turborepo.com →
-        </a>
-      </footer>
+            Fluid animated backgrounds powered by WebGL, Kawase blur & domain
+            warping.
+          </motion.p>
+          <div className="-z-1 absolute bottom-0 left-0 h-48 w-full bg-linear-to-t from-black/30 to-black/0" />
+        </main>
+
+        <Documentation />
+        <Footer />
+      </div>
     </div>
   );
 }

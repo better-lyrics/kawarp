@@ -1,0 +1,49 @@
+{
+  "name": "@kawarp/core",
+  "version": "0.1.0",
+  "description": "Fluid animated background renderer using WebGL, Kawase blur, and domain warping",
+  "keywords": [
+    "webgl",
+    "blur",
+    "kawase",
+    "animation",
+    "background",
+    "canvas",
+    "graphics"
+  ],
+  "license": "AGPL-3.0",
+  "author": "Better Lyrics",
+  "homepage": "https://github.com/better-lyrics/kawarp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/better-lyrics/kawarp.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/better-lyrics/kawarp/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch --preserveWatchOutput",
+    "check-types": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@repo/typescript-config": "workspace:*",
+    "@types/node": "^22.15.3",
+    "typescript": "5.9.2"
+  }
+}

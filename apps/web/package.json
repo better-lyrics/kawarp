@@ -11,10 +11,16 @@
     "check-types": "next typegen && tsc --noEmit"
   },
   "dependencies": {
-    "@repo/ui": "workspace:*",
+    "@kawarp/core": "workspace:*",
+    "@kawarp/react": "workspace:*",
+    "@tailwindcss/postcss": "^4.1.17",
+    "motion": "^12.23.24",
     "next": "^16.0.1",
+    "postcss": "^8.5.6",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "shiki": "^3.17.0",
+    "tailwindcss": "^4.1.17"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",

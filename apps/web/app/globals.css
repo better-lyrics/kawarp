@@ -1,50 +1,31 @@
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@import "tailwindcss";
+
+@font-face {
+  font-family: "Switzer";
+  src: url("https://cdn.fontshare.com/wf/FNIFJSIDTIJKHIJSDH7E2O6IX7LGQWXJ/GYZZH3T7DFCV5SXQDDPKNDOLXSRHD6SH/RLHF7S2LQMDDWNGOKJ2TIVBAPFXNV3WM.woff2")
+    format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+  font-style: normal;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+@font-face {
+  font-family: "Switzer";
+  src: url("https://cdn.fontshare.com/wf/FNIFJSIDTIJKHIJSDH7E2O6IX7LGQWXJ/GYZZH3T7DFCV5SXQDDPKNDOLXSRHD6SH/S5JBGPYKQPVQVBOCIBMPBG2DWV76SLJY.woff2")
+    format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+  font-style: italic;
 }
 
-html,
+@theme {
+  --font-sans: "Switzer", ui-sans-serif, system-ui, sans-serif;
+}
+
+html {
+  font-family: var(--font-sans);
+}
+
 body {
-  max-width: 100vw;
-  overflow-x: hidden;
-}
-
-body {
-  color: var(--foreground);
-  background: var(--background);
-}
-
-* {
-  box-sizing: border-box;
-  padding: 0;
-  margin: 0;
-}
-
-a {
-  color: inherit;
-  text-decoration: none;
-}
-
-.imgDark {
-  display: none;
-}
-
-@media (prefers-color-scheme: dark) {
-  html {
-    color-scheme: dark;
-  }
-
-  .imgLight {
-    display: none;
-  }
-  .imgDark {
-    display: unset;
-  }
+  @apply bg-zinc-950 text-zinc-100 antialiased;
 }
