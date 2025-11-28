@@ -24,10 +24,12 @@ export function Header({ githubUrl }: HeaderProps) {
           initial={{
             opacity: 0,
             y: -12,
+            filter: "blur(4px)",
           }}
           animate={{
             opacity: 1,
             y: 0,
+            filter: "blur(0px)",
           }}
           transition={{ delay: 0.3, duration: 0.3 }}
           className="flex items-center gap-2 text-zinc-300 text-xs"

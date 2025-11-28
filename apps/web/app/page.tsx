@@ -106,8 +106,16 @@ export default function Home() {
 
         <main className="relative flex min-h-[95vh] items-end justify-end p-6">
           <motion.p
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
+            initial={{
+              opacity: 0,
+              y: 8,
+              filter: "blur(4px)",
+            }}
+            animate={{
+              opacity: 1,
+              y: 0,
+              filter: "blur(0px)",
+            }}
             transition={{ delay: 0.3, duration: 0.3 }}
             className="max-w-xs text-right text-sm text-white/40"
           >
