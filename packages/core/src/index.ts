@@ -224,7 +224,8 @@ export class Kawarp {
 
   // Animation state
   private animationId: number | null = null;
-  private startTimestamp: number = 0;
+  private lastFrameTime: number = 0;
+  private accumulatedTime: number = 0;
   private isPlaying = false;
 
   // Transition state
@@ -236,6 +237,7 @@ export class Kawarp {
   private _warpIntensity: number;
   private _blurPasses: number;
   private _animationSpeed: number;
+  private _targetAnimationSpeed: number;
   private _saturation: number;
   private _tintColor: [number, number, number];
   private _tintIntensity: number;
@@ -292,6 +294,7 @@ export class Kawarp {
     this._warpIntensity = options.warpIntensity ?? 1.0;
     this._blurPasses = options.blurPasses ?? 8;
     this._animationSpeed = options.animationSpeed ?? 1.0;
+    this._targetAnimationSpeed = this._animationSpeed;
     this._transitionDuration = options.transitionDuration ?? 1000;
     this._saturation = options.saturation ?? 1.5;
     this._tintColor = options.tintColor ?? [0.157, 0.157, 0.235];
@@ -331,7 +334,10 @@ export class Kawarp {
       tint: {
         texture: gl.getUniformLocation(this.tintProgram, "u_texture")!,
         tintColor: gl.getUniformLocation(this.tintProgram, "u_tintColor")!,
-        tintIntensity: gl.getUniformLocation(this.tintProgram, "u_tintIntensity")!,
+        tintIntensity: gl.getUniformLocation(
+          this.tintProgram,
+          "u_tintIntensity",
+        )!,
       },
       output: {
         texture: gl.getUniformLocation(this.outputProgram, "u_texture")!,
@@ -344,10 +350,10 @@ export class Kawarp {
 
     // Create buffers
     this.positionBuffer = this.createBuffer(
-      new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1])
+      new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
     );
     this.texCoordBuffer = this.createBuffer(
-      new Float32Array([0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1])
+      new Float32Array([0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1]),
     );
 
     // Create source texture
@@ -390,10 +396,10 @@ export class Kawarp {
   }
 
   get animationSpeed(): number {
-    return this._animationSpeed;
+    return this._targetAnimationSpeed;
   }
   set animationSpeed(value: number) {
-    this._animationSpeed = Math.max(0.1, Math.min(5, value));
+    this._targetAnimationSpeed = Math.max(0.1, Math.min(5, value));
   }
 
   get transitionDuration(): number {
@@ -467,7 +473,7 @@ export class Kawarp {
     return {
       warpIntensity: this._warpIntensity,
       blurPasses: this._blurPasses,
-      animationSpeed: this._animationSpeed,
+      animationSpeed: this._targetAnimationSpeed,
       transitionDuration: this._transitionDuration,
       saturation: this._saturation,
       tintColor: this._tintColor,
@@ -489,7 +495,7 @@ export class Kawarp {
           this.gl.RGBA,
           this.gl.RGBA,
           this.gl.UNSIGNED_BYTE,
-          img
+          img,
         );
         this.processNewImage();
         resolve();
@@ -507,7 +513,7 @@ export class Kawarp {
       this.gl.RGBA,
       this.gl.RGBA,
       this.gl.UNSIGNED_BYTE,
-      source
+      source,
     );
     this.processNewImage();
   }
@@ -515,7 +521,7 @@ export class Kawarp {
   loadImageData(
     data: Uint8Array | Uint8ClampedArray,
     width: number,
-    height: number
+    height: number,
   ): void {
     this.gl.bindTexture(this.gl.TEXTURE_2D, this.sourceTexture);
     this.gl.texImage2D(
@@ -527,7 +533,7 @@ export class Kawarp {
       0,
       this.gl.RGBA,
       this.gl.UNSIGNED_BYTE,
-      data instanceof Uint8ClampedArray ? new Uint8Array(data.buffer) : data
+      data instanceof Uint8ClampedArray ? new Uint8Array(data.buffer) : data,
     );
     this.processNewImage();
   }
@@ -551,7 +557,7 @@ export class Kawarp {
 
   async loadArrayBuffer(
     buffer: ArrayBuffer,
-    mimeType = "image/png"
+    mimeType = "image/png",
   ): Promise<void> {
     const blob = new Blob([buffer], { type: mimeType });
     return this.loadBlob(blob);
@@ -667,7 +673,7 @@ export class Kawarp {
   start(): void {
     if (this.isPlaying) return;
     this.isPlaying = true;
-    this.startTimestamp = performance.now();
+    this.lastFrameTime = performance.now();
     requestAnimationFrame(this.renderLoop);
   }
 
@@ -681,9 +687,16 @@ export class Kawarp {
 
   renderFrame(time?: number): void {
     const now = performance.now();
-    const t =
-      time ?? ((now - this.startTimestamp) / 1000) * this._animationSpeed;
-    this.render(t, now);
+    if (time !== undefined) {
+      this.render(time, now);
+    } else {
+      const dt = (now - this.lastFrameTime) / 1000;
+      this.lastFrameTime = now;
+      this._animationSpeed +=
+        (this._targetAnimationSpeed - this._animationSpeed) * 0.05;
+      this.accumulatedTime += dt * this._animationSpeed;
+      this.render(this.accumulatedTime, now);
+    }
   }
 
   dispose(): void {
@@ -709,9 +722,12 @@ export class Kawarp {
 
   private renderLoop = (timestamp: DOMHighResTimeStamp): void => {
     if (!this.isPlaying) return;
-    const elapsed = timestamp - this.startTimestamp;
-    const time = (elapsed / 1000) * this._animationSpeed;
-    this.render(time, timestamp);
+    const dt = (timestamp - this.lastFrameTime) / 1000;
+    this.lastFrameTime = timestamp;
+    this._animationSpeed +=
+      (this._targetAnimationSpeed - this._animationSpeed) * 0.05;
+    this.accumulatedTime += dt * this._animationSpeed;
+    this.render(this.accumulatedTime, timestamp);
     this.animationId = requestAnimationFrame(this.renderLoop);
   };
 
@@ -839,13 +855,13 @@ export class Kawarp {
 
   private createProgram(
     vertexSource: string,
-    fragmentSource: string
+    fragmentSource: string,
   ): WebGLProgram {
     const gl = this.gl;
     const vertexShader = this.createShader(gl.VERTEX_SHADER, vertexSource);
     const fragmentShader = this.createShader(
       gl.FRAGMENT_SHADER,
-      fragmentSource
+      fragmentSource,
     );
 
     const program = gl.createProgram();
@@ -889,12 +905,19 @@ export class Kawarp {
     return texture;
   }
 
-  private createFramebuffer(width: number, height: number, useHighPrecision = false): Framebuffer {
+  private createFramebuffer(
+    width: number,
+    height: number,
+    useHighPrecision = false,
+  ): Framebuffer {
     const gl = this.gl;
     const texture = this.createTexture();
 
-    const canUseHalfFloat = useHighPrecision && this.halfFloatExt && this.halfFloatLinearExt;
-    const type = canUseHalfFloat ? this.halfFloatExt!.HALF_FLOAT_OES : gl.UNSIGNED_BYTE;
+    const canUseHalfFloat =
+      useHighPrecision && this.halfFloatExt && this.halfFloatLinearExt;
+    const type = canUseHalfFloat
+      ? this.halfFloatExt!.HALF_FLOAT_OES
+      : gl.UNSIGNED_BYTE;
 
     gl.texImage2D(
       gl.TEXTURE_2D,
@@ -905,7 +928,7 @@ export class Kawarp {
       0,
       gl.RGBA,
       type,
-      null
+      null,
     );
 
     const framebuffer = gl.createFramebuffer();
@@ -917,7 +940,7 @@ export class Kawarp {
       gl.COLOR_ATTACHMENT0,
       gl.TEXTURE_2D,
       texture,
-      0
+      0,
     );
     return { framebuffer, texture };
   }

@@ -40,7 +40,7 @@ function rgbToHex(rgb: [number, number, number]): string {
       .map((v) =>
         Math.round(v * 255)
           .toString(16)
-          .padStart(2, "0")
+          .padStart(2, "0"),
       )
       .join("")
   );
@@ -258,7 +258,9 @@ export function ControlPanel({
                           <input
                             type="color"
                             value={rgbToHex(tintColor)}
-                            onChange={(e) => onTintColorChange(hexToRgb(e.target.value))}
+                            onChange={(e) =>
+                              onTintColorChange(hexToRgb(e.target.value))
+                            }
                             className="sr-only"
                           />
                         </label>

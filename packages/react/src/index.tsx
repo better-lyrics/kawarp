@@ -226,7 +226,16 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
       tintIntensity,
       dithering,
     });
-  }, [warpIntensity, blurPasses, animationSpeed, transitionDuration, saturation, stableTintColor, tintIntensity, dithering]);
+  }, [
+    warpIntensity,
+    blurPasses,
+    animationSpeed,
+    transitionDuration,
+    saturation,
+    stableTintColor,
+    tintIntensity,
+    dithering,
+  ]);
 
   // Handle resize with ResizeObserver (debounced, with devicePixelRatio)
   useEffect(() => {
