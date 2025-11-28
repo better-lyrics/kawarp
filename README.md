@@ -1,4 +1,4 @@
-<img width="1920" height="1280" alt="banner" src="https://github.com/user-attachments/assets/4da80505-fbd2-4f3f-ac48-5748793cec84" />
+<img width="1920" height="1280" alt="kawarpbanner" src="https://github.com/user-attachments/assets/7420ee3d-ed6a-4e33-b1b4-8c5a46053215" />
 
 # Kawarp
 
