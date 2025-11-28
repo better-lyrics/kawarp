@@ -1,6 +1,6 @@
 {
   "name": "@kawarp/core",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Fluid animated background renderer using WebGL, Kawase blur, and domain warping",
   "keywords": [
     "webgl",
