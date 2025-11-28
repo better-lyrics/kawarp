@@ -1,5 +1,13 @@
 # @kawarp/react
 
+## 1.0.2
+
+### Patch Changes
+
+- 8ca72d0: fix: highp instead of mediump for shaders
+- Updated dependencies [8ca72d0]
+  - @kawarp/core@1.0.2
+
 ## 1.0.1
 
 ### Patch Changes
