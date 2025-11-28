@@ -77,6 +77,10 @@ pnpm install
 pnpm dev
 ```
 
+## Acknowledgements
+
+The technique of combining Kawase blur on downscaled textures with domain warping for fluid distortion is based on [this article](https://portfolio.justzht.com/diffuse/) on [Diffuse](https://diffuse.app/) by Justin Zhang.
+
 ## License
 
 AGPL-3.0
