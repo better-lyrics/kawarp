@@ -1,6 +1,6 @@
 # @kawarp/core
 
-Fluid animated background renderer using WebGL, Kawase blur, and domain warping. Creates effects similar to Apple Music's album art visualization.
+Fluid animated background renderer using WebGL, Kawase blur, and domain warping. Creates effects similar to Apple Music's album art visualization. Zero dependencies.
 
 ## Installation
 

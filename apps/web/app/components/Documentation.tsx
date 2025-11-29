@@ -170,8 +170,8 @@ export function Documentation() {
         </h2>
 
         <p className="mb-12 text-zinc-400 leading-relaxed">
-          Kawarp is a WebGL-powered library for creating fluid, animated
-          background effects similar to Apple Music&apos;s album art
+          Kawarp is a zero-dependency, WebGL-powered library for creating fluid,
+          animated background effects similar to Apple Music&apos;s album art
           visualization. It uses Kawase blur for efficient, high-quality
           blurring and simplex noise-based domain warping for organic motion.
           The library is optimized for performance with blur operations running

@@ -1,6 +1,6 @@
 # @kawarp/react
 
-React component for Kawarp fluid animated backgrounds.
+React component for Kawarp fluid animated backgrounds. Built on the zero-dependency @kawarp/core.
 
 ## Installation
 
