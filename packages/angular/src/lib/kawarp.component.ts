@@ -11,7 +11,10 @@ import {
   output,
   viewChild,
 } from "@angular/core";
+import { toSignal } from "@angular/core/rxjs-interop";
 import { Kawarp, type KawarpOptions } from "@kawarp/core";
+import { EMPTY, Subject, from } from "rxjs";
+import { catchError, switchMap, tap } from "rxjs/operators";
 
 export type { KawarpOptions } from "@kawarp/core";
 
@@ -19,7 +22,9 @@ export type { KawarpOptions } from "@kawarp/core";
   selector: "kawarp-background",
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `<div #container class="kawarp-container"><canvas #canvas></canvas></div>`,
+  template: `<div #container class="kawarp-container">
+    <canvas #canvas></canvas>
+  </div>`,
   styles: `
     :host { display: block; width: 100%; height: 100%; }
     .kawarp-container { position: relative; width: 100%; height: 100%; }
@@ -28,8 +33,36 @@ export type { KawarpOptions } from "@kawarp/core";
 })
 export class KawarpComponent {
   private readonly destroyRef = inject(DestroyRef);
-  private readonly canvasRef = viewChild.required<ElementRef<HTMLCanvasElement>>("canvas");
-  private readonly containerRef = viewChild.required<ElementRef<HTMLDivElement>>("container");
+  private readonly canvasRef =
+    viewChild.required<ElementRef<HTMLCanvasElement>>("canvas");
+  private readonly containerRef =
+    viewChild.required<ElementRef<HTMLDivElement>>("container");
+  private readonly loadRequest$ = new Subject<{
+    promise: Promise<void>;
+    autoPlay: boolean;
+    emitError: boolean;
+  }>();
+  private readonly loadResult = toSignal(
+    this.loadRequest$.pipe(
+      switchMap(({ promise, autoPlay, emitError }) =>
+        from(promise).pipe(
+          tap(() => {
+            this.loaded.emit();
+            if (autoPlay && this.autoPlay()) this.kawarp?.start();
+          }),
+          catchError((e) => {
+            if (emitError) {
+              const err = e instanceof Error ? e : new Error(String(e));
+              this.errored.emit(err);
+            }
+            return EMPTY;
+          })
+        )
+      )
+    ),
+    { initialValue: undefined }
+  );
+  private optionsFrame: number | null = null;
 
   // Signal inputs
   readonly src = input<string>();
@@ -59,13 +92,21 @@ export class KawarpComponent {
 
   // Computed options from inputs
   private readonly options = computed<KawarpOptions>(() => ({
-    ...(this.warpIntensity() !== undefined && { warpIntensity: this.warpIntensity() }),
+    ...(this.warpIntensity() !== undefined && {
+      warpIntensity: this.warpIntensity(),
+    }),
     ...(this.blurPasses() !== undefined && { blurPasses: this.blurPasses() }),
-    ...(this.animationSpeed() !== undefined && { animationSpeed: this.animationSpeed() }),
-    ...(this.transitionDuration() !== undefined && { transitionDuration: this.transitionDuration() }),
+    ...(this.animationSpeed() !== undefined && {
+      animationSpeed: this.animationSpeed(),
+    }),
+    ...(this.transitionDuration() !== undefined && {
+      transitionDuration: this.transitionDuration(),
+    }),
     ...(this.saturation() !== undefined && { saturation: this.saturation() }),
     ...(this.tintColor() !== undefined && { tintColor: this.tintColor() }),
-    ...(this.tintIntensity() !== undefined && { tintIntensity: this.tintIntensity() }),
+    ...(this.tintIntensity() !== undefined && {
+      tintIntensity: this.tintIntensity(),
+    }),
     ...(this.dithering() !== undefined && { dithering: this.dithering() }),
     ...(this.scale() !== undefined && { scale: this.scale() }),
   }));
@@ -73,18 +114,38 @@ export class KawarpComponent {
   constructor() {
     afterNextRender(() => this.initialize());
 
+    void this.loadResult;
+
     effect(() => {
       const opts = this.options();
-      this.kawarp?.setOptions(opts);
+      if (!this.kawarp) return;
+      if (this.optionsFrame !== null) cancelAnimationFrame(this.optionsFrame);
+      this.optionsFrame = requestAnimationFrame(() => {
+        this.optionsFrame = null;
+        this.kawarp?.setOptions(opts);
+      });
     });
 
     effect(() => {
       const src = this.src();
       if (src && src !== this.currentSrc && this.kawarp) {
         this.currentSrc = src;
-        this.kawarp.loadImage(src)
-          .then(() => this.loaded.emit())
-          .catch((e) => this.errored.emit(e instanceof Error ? e : new Error(String(e))));
+        const promise = this.kawarp.loadImage(src);
+        this.loadRequest$.next({
+          promise,
+          autoPlay: true,
+          emitError: true,
+        });
+      }
+    });
+
+    effect(() => {
+      const shouldPlay = this.autoPlay();
+      if (!this.kawarp) return;
+      if (shouldPlay) {
+        this.kawarp.start();
+      } else {
+        this.kawarp.stop();
       }
     });
   }
@@ -99,12 +160,12 @@ export class KawarpComponent {
     const src = this.src();
     if (src) {
       this.currentSrc = src;
-      this.kawarp.loadImage(src)
-        .then(() => {
-          this.loaded.emit();
-          if (this.autoPlay()) this.kawarp?.start();
-        })
-        .catch((e) => this.errored.emit(e instanceof Error ? e : new Error(String(e))));
+      const promise = this.kawarp.loadImage(src);
+      this.loadRequest$.next({
+        promise,
+        autoPlay: true,
+        emitError: true,
+      });
     } else if (this.autoPlay()) {
       this.kawarp.start();
     }
@@ -112,10 +173,15 @@ export class KawarpComponent {
     this.destroyRef.onDestroy(() => {
       this.kawarp?.dispose();
       this.kawarp = null;
+      if (this.optionsFrame !== null) cancelAnimationFrame(this.optionsFrame);
+      this.optionsFrame = null;
     });
   }
 
-  private setupResizeObserver(container: HTMLElement, canvas: HTMLCanvasElement): void {
+  private setupResizeObserver(
+    container: HTMLElement,
+    canvas: HTMLCanvasElement
+  ): void {
     let timeout: ReturnType<typeof setTimeout> | null = null;
 
     const updateSize = () => {
@@ -140,23 +206,35 @@ export class KawarpComponent {
   }
 
   // Public API
-  loadImage = async (url: string): Promise<void> => {
+  readonly loadImage = async (url: string): Promise<void> => {
     if (!this.kawarp) return;
-    await this.kawarp.loadImage(url);
-    this.loaded.emit();
+    this.currentSrc = url;
+    const promise = this.kawarp.loadImage(url);
+    this.loadRequest$.next({
+      promise,
+      autoPlay: false,
+      emitError: false,
+    });
+    return promise;
   };
 
-  loadBlob = async (blob: Blob): Promise<void> => {
+  readonly loadBlob = async (blob: Blob): Promise<void> => {
     if (!this.kawarp) return;
-    await this.kawarp.loadBlob(blob);
-    this.loaded.emit();
+    this.currentSrc = undefined;
+    const promise = this.kawarp.loadBlob(blob);
+    this.loadRequest$.next({
+      promise,
+      autoPlay: false,
+      emitError: false,
+    });
+    return promise;
   };
 
-  loadGradient = (colors: string[], angle?: number): void => {
+  readonly loadGradient = (colors: string[], angle?: number): void => {
     this.kawarp?.loadGradient(colors, angle);
   };
 
-  start = (): void => this.kawarp?.start();
-  stop = (): void => this.kawarp?.stop();
-  resize = (): void => this.kawarp?.resize();
+  readonly start = (): void => this.kawarp?.start();
+  readonly stop = (): void => this.kawarp?.stop();
+  readonly resize = (): void => this.kawarp?.resize();
 }
