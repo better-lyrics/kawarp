@@ -7,7 +7,7 @@ interface CodeBlockProps {
 export function CodeBlock({ code }: CodeBlockProps) {
   const tokenize = (text: string) => {
     const regex =
-      /(\b(?:import|from|const|await|new|async|function|return|export|class)\b)|('[^']*'|"[^"]*")|(\b(?:Kawarp|document|canvas|kawarp)\b)|(\/\/.*)|(\.\w+(?=\())|([^'"\s]+|\s+)/g;
+      /(\b(?:import|from|const|await|new|async|function|return|export|class)\b)|('[^']*'|"[^"]*")|(\b(?:Kawarp|KawarpComponent|document|canvas|kawarp)\b)|(\/\/.*)|(\.\w+(?=\())|([^'"\s]+|\s+)/g;
 
     const matches = text.matchAll(regex);
     const tokens: { text: string; type: string; id: string }[] = [];

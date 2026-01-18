@@ -33,7 +33,7 @@ export function InstallTabs({
           >
             {selected === pm.id && (
               <motion.div
-                layoutId="install-tab-indicator"
+                layoutId={`${packageName}-install-tab-indicator`}
                 className="absolute inset-0 rounded-lg bg-white/10"
                 transition={{ duration: 0.2 }}
               />
