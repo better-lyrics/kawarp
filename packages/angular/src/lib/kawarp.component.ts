@@ -213,7 +213,7 @@ export class KawarpComponent {
     this.loadRequest$.next({
       promise,
       autoPlay: false,
-      emitError: false,
+      emitError: true,
     });
     return promise;
   };
@@ -225,7 +225,7 @@ export class KawarpComponent {
     this.loadRequest$.next({
       promise,
       autoPlay: false,
-      emitError: false,
+      emitError: true,
     });
     return promise;
   };
