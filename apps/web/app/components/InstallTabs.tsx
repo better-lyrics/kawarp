@@ -25,7 +25,7 @@ export function InstallTabs({
             key={pm.id}
             type="button"
             onClick={() => setSelected(pm.id)}
-            className={`relative rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+            className={`relative rounded-lg px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
               selected === pm.id
                 ? "text-white"
                 : "text-zinc-500 hover:text-zinc-300"
@@ -33,7 +33,7 @@ export function InstallTabs({
           >
             {selected === pm.id && (
               <motion.div
-                layoutId="install-tab-indicator"
+                layoutId={`${packageName}-install-tab-indicator`}
                 className="absolute inset-0 rounded-lg bg-white/10"
                 transition={{ duration: 0.2 }}
               />
