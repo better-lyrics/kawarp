@@ -11,7 +11,7 @@
     "canvas",
     "graphics"
   ],
-  "license": "AGPL-3.0",
+  "license": "MIT",
   "author": "Better Lyrics",
   "homepage": "https://github.com/better-lyrics/kawarp",
   "repository": {
