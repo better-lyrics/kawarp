@@ -1,5 +1,11 @@
 # @kawarp/core
 
+## 1.2.0
+
+### Minor Changes
+
+- 8a9a339: Relicense from AGPL-3.0 to MIT.
+
 ## 1.1.1
 
 ### Patch Changes
