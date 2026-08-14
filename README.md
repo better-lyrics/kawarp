@@ -13,6 +13,10 @@ Fluid animated background renderer using WebGL, Kawase blur, and domain warping.
 - **[@kawarp/core](./packages/core)** - Pure TypeScript WebGL renderer
 - **[@kawarp/react](./packages/react)** - React component wrapper
 
+## Ports
+
+- **[kawarp-agsl](https://github.com/meowarex/kawarp-agsl)** - AGSL port for Android by [meowarex](https://github.com/meowarex)
+
 ## Installation
 
 ```bash
