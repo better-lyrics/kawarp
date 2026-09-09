@@ -6,6 +6,7 @@
  *
  * Optimized architecture:
  * - Blur runs on small textures (128x128) only when image changes
+ * - Smooth crossfade transitions between images
  * - Instant first frame without black buffer crossfade
  * - High-precision FBO tracking and resolution management
  * - Robust CORS and blob/imageBitmap loading
@@ -232,8 +233,8 @@ export class Kawarp {
 
   // Animation state
   private animationId: number | null = null;
-  private lastFrameTime = 0;
-  private accumulatedTime = 0;
+  private lastFrameTime: number = 0;
+  private accumulatedTime: number = 0;
   private isPlaying = false;
 
   // Transition state
@@ -254,40 +255,40 @@ export class Kawarp {
   private hasImage = false;
 
   // Cached attribute locations
-  private attribs: {
+  private attribs!: {
     position: number;
     texCoord: number;
   };
 
   // Cached uniform locations
-  private uniforms: {
+  private uniforms!: {
     blur: {
-      resolution: WebGLUniformLocation | null;
-      texture: WebGLUniformLocation | null;
-      offset: WebGLUniformLocation | null;
+      resolution: WebGLUniformLocation;
+      texture: WebGLUniformLocation;
+      offset: WebGLUniformLocation;
     };
     blend: {
-      texture1: WebGLUniformLocation | null;
-      texture2: WebGLUniformLocation | null;
-      blend: WebGLUniformLocation | null;
+      texture1: WebGLUniformLocation;
+      texture2: WebGLUniformLocation;
+      blend: WebGLUniformLocation;
     };
     warp: {
-      texture: WebGLUniformLocation | null;
-      time: WebGLUniformLocation | null;
-      intensity: WebGLUniformLocation | null;
+      texture: WebGLUniformLocation;
+      time: WebGLUniformLocation;
+      intensity: WebGLUniformLocation;
     };
     tint: {
-      texture: WebGLUniformLocation | null;
-      tintColor: WebGLUniformLocation | null;
-      tintIntensity: WebGLUniformLocation | null;
+      texture: WebGLUniformLocation;
+      tintColor: WebGLUniformLocation;
+      tintIntensity: WebGLUniformLocation;
     };
     output: {
-      texture: WebGLUniformLocation | null;
-      saturation: WebGLUniformLocation | null;
-      dithering: WebGLUniformLocation | null;
-      time: WebGLUniformLocation | null;
-      scale: WebGLUniformLocation | null;
-      resolution: WebGLUniformLocation | null;
+      texture: WebGLUniformLocation;
+      saturation: WebGLUniformLocation;
+      dithering: WebGLUniformLocation;
+      time: WebGLUniformLocation;
+      scale: WebGLUniformLocation;
+      resolution: WebGLUniformLocation;
     };
   };
 
@@ -326,7 +327,7 @@ export class Kawarp {
     this.warpProgram = this.createProgram(VERTEX_SHADER, DOMAIN_WARP_SHADER);
     this.outputProgram = this.createProgram(VERTEX_SHADER, OUTPUT_SHADER);
 
-    // Cache attribute locations
+    // Cache attribute locations (same for all programs since they use same vertex shader)
     this.attribs = {
       position: gl.getAttribLocation(this.blurProgram, "a_position"),
       texCoord: gl.getAttribLocation(this.blurProgram, "a_texCoord"),
@@ -335,32 +336,35 @@ export class Kawarp {
     // Cache uniform locations
     this.uniforms = {
       blur: {
-        resolution: gl.getUniformLocation(this.blurProgram, "u_resolution"),
-        texture: gl.getUniformLocation(this.blurProgram, "u_texture"),
-        offset: gl.getUniformLocation(this.blurProgram, "u_offset"),
+        resolution: gl.getUniformLocation(this.blurProgram, "u_resolution")!,
+        texture: gl.getUniformLocation(this.blurProgram, "u_texture")!,
+        offset: gl.getUniformLocation(this.blurProgram, "u_offset")!,
       },
       blend: {
-        texture1: gl.getUniformLocation(this.blendProgram, "u_texture1"),
-        texture2: gl.getUniformLocation(this.blendProgram, "u_texture2"),
-        blend: gl.getUniformLocation(this.blendProgram, "u_blend"),
+        texture1: gl.getUniformLocation(this.blendProgram, "u_texture1")!,
+        texture2: gl.getUniformLocation(this.blendProgram, "u_texture2")!,
+        blend: gl.getUniformLocation(this.blendProgram, "u_blend")!,
       },
       warp: {
-        texture: gl.getUniformLocation(this.warpProgram, "u_texture"),
-        time: gl.getUniformLocation(this.warpProgram, "u_time"),
-        intensity: gl.getUniformLocation(this.warpProgram, "u_intensity"),
+        texture: gl.getUniformLocation(this.warpProgram, "u_texture")!,
+        time: gl.getUniformLocation(this.warpProgram, "u_time")!,
+        intensity: gl.getUniformLocation(this.warpProgram, "u_intensity")!,
       },
       tint: {
-        texture: gl.getUniformLocation(this.tintProgram, "u_texture"),
-        tintColor: gl.getUniformLocation(this.tintProgram, "u_tintColor"),
-        tintIntensity: gl.getUniformLocation(this.tintProgram, "u_tintIntensity"),
+        texture: gl.getUniformLocation(this.tintProgram, "u_texture")!,
+        tintColor: gl.getUniformLocation(this.tintProgram, "u_tintColor")!,
+        tintIntensity: gl.getUniformLocation(
+          this.tintProgram,
+          "u_tintIntensity",
+        )!,
       },
       output: {
-        texture: gl.getUniformLocation(this.outputProgram, "u_texture"),
-        saturation: gl.getUniformLocation(this.outputProgram, "u_saturation"),
-        dithering: gl.getUniformLocation(this.outputProgram, "u_dithering"),
-        time: gl.getUniformLocation(this.outputProgram, "u_time"),
-        scale: gl.getUniformLocation(this.outputProgram, "u_scale"),
-        resolution: gl.getUniformLocation(this.outputProgram, "u_resolution"),
+        texture: gl.getUniformLocation(this.outputProgram, "u_texture")!,
+        saturation: gl.getUniformLocation(this.outputProgram, "u_saturation")!,
+        dithering: gl.getUniformLocation(this.outputProgram, "u_dithering")!,
+        time: gl.getUniformLocation(this.outputProgram, "u_time")!,
+        scale: gl.getUniformLocation(this.outputProgram, "u_scale")!,
+        resolution: gl.getUniformLocation(this.outputProgram, "u_resolution")!,
       },
     };
 
@@ -375,11 +379,11 @@ export class Kawarp {
     // Create source texture
     this.sourceTexture = this.createTexture();
 
-    // Create small FBOs for blur operations
+    // Create small FBOs for blur operations (high precision to avoid banding)
     this.blurFBO1 = this.createFramebuffer(BLUR_SIZE, BLUR_SIZE, true);
     this.blurFBO2 = this.createFramebuffer(BLUR_SIZE, BLUR_SIZE, true);
 
-    // Create album FBOs for crossfade
+    // Create album FBOs for crossfade (high precision to avoid banding)
     this.currentAlbumFBO = this.createFramebuffer(BLUR_SIZE, BLUR_SIZE, true);
     this.nextAlbumFBO = this.createFramebuffer(BLUR_SIZE, BLUR_SIZE, true);
 
@@ -388,6 +392,7 @@ export class Kawarp {
     this.warpFBO = this.createFramebuffer(initW, initH, true);
   }
 
+  // Getters and setters
   get warpIntensity(): number {
     return this._warpIntensity;
   }
@@ -402,6 +407,7 @@ export class Kawarp {
     const newValue = Math.max(1, Math.min(40, Math.floor(value)));
     if (newValue !== this._blurPasses) {
       this._blurPasses = newValue;
+      // Re-blur with new pass count if we have an image
       if (this.hasImage) {
         this.reblurCurrentImage();
       }
@@ -433,9 +439,11 @@ export class Kawarp {
     return this._tintColor;
   }
   set tintColor(value: [number, number, number]) {
-    const newValue = value.map((v) =>
-      Math.max(0, Math.min(1, v)),
-    ) as [number, number, number];
+    const newValue = value.map((v) => Math.max(0, Math.min(1, v))) as [
+      number,
+      number,
+      number,
+    ];
     const changed = newValue.some((v, i) => v !== this._tintColor[i]);
     if (changed) {
       this._tintColor = newValue;
@@ -472,7 +480,7 @@ export class Kawarp {
     this._scale = Math.max(0.01, Math.min(4, value));
   }
 
-  setOptions(options: KawarpOptions): void {
+  setOptions(options: Partial<KawarpOptions>): void {
     if (options.warpIntensity !== undefined)
       this.warpIntensity = options.warpIntensity;
     if (options.blurPasses !== undefined) this.blurPasses = options.blurPasses;
@@ -502,6 +510,7 @@ export class Kawarp {
     };
   }
 
+  // Image loading methods
   async loadImage(src: string): Promise<void> {
     if (!src) return;
 
@@ -626,6 +635,10 @@ export class Kawarp {
     this.loadImageElement(canvas);
   }
 
+  /**
+   * Process a new image: blur it and start transition
+   * This is the key optimization - blur only runs here, not every frame!
+   */
   private processNewImage(): void {
     if (!this.hasImage) {
       this.blurSourceInto(this.nextAlbumFBO);
@@ -644,10 +657,17 @@ export class Kawarp {
     this.transitionStartTime = performance.now();
   }
 
+  /**
+   * Re-blur the current image (used when blurPasses changes)
+   * Updates nextAlbumFBO in place without starting a transition
+   */
   private reblurCurrentImage(): void {
     this.blurSourceInto(this.nextAlbumFBO);
   }
 
+  /**
+   * Blur the source texture into the target FBO (with tint applied before blur)
+   */
   private blurSourceInto(targetFBO: Framebuffer): void {
     const gl = this.gl;
 
@@ -762,6 +782,10 @@ export class Kawarp {
     this.animationId = requestAnimationFrame(this.renderLoop);
   };
 
+  /**
+   * Main render loop - very efficient!
+   * Just: blend album FBOs → domain warp → output
+   */
   private render(time: number, timestamp = performance.now()): void {
     if (!this.hasImage) return;
 
@@ -774,6 +798,7 @@ export class Kawarp {
       this.warpFBO = this.createFramebuffer(width, height, true);
     }
 
+    // Calculate transition blend factor
     let blendFactor = 1.0;
     if (this.isTransitioning) {
       const elapsed = timestamp - this.transitionStartTime;
@@ -860,7 +885,6 @@ export class Kawarp {
       gl.deleteShader(shader);
       throw new Error(`Shader compile error: ${error}`);
     }
-
     return shader;
   }
 
@@ -890,7 +914,6 @@ export class Kawarp {
 
     gl.deleteShader(vertexShader);
     gl.deleteShader(fragmentShader);
-
     return program;
   }
 
@@ -914,7 +937,6 @@ export class Kawarp {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-
     return texture;
   }
 
@@ -928,10 +950,9 @@ export class Kawarp {
 
     const canUseHalfFloat =
       useHighPrecision && this.halfFloatExt && this.halfFloatLinearExt;
-    const type =
-      canUseHalfFloat && this.halfFloatExt
-        ? this.halfFloatExt.HALF_FLOAT_OES
-        : gl.UNSIGNED_BYTE;
+    const type = canUseHalfFloat
+      ? this.halfFloatExt!.HALF_FLOAT_OES
+      : gl.UNSIGNED_BYTE;
 
     gl.texImage2D(
       gl.TEXTURE_2D,
@@ -956,7 +977,6 @@ export class Kawarp {
       texture,
       0,
     );
-
     return { framebuffer, texture, width, height };
   }
 
