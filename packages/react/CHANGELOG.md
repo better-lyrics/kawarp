@@ -1,5 +1,12 @@
 # @kawarp/react
 
+## 1.2.1
+
+### Patch Changes
+
+- Updated dependencies [561a1f6]
+  - @kawarp/core@1.2.1
+
 ## 1.2.0
 
 ### Minor Changes
