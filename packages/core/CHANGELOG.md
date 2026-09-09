@@ -1,5 +1,11 @@
 # @kawarp/core
 
+## 1.2.1
+
+### Patch Changes
+
+- 561a1f6: Fix FBO viewport scaling on canvas resize and the initial black frame on first image load. Image loading is now more robust, using a CORS fetch with createImageBitmap and an `<img>` fallback.
+
 ## 1.2.0
 
 ### Minor Changes
