@@ -5,8 +5,8 @@
  * Uses WebGL with Kawase blur and domain warping techniques.
  *
  * Optimized architecture:
- * - Multi-octave organic domain warp shader
- * - Instant blur on first frame without black buffer crossfade
+ * - Blur runs on small textures (128x128) only when image changes
+ * - Instant first frame without black buffer crossfade
  * - High-precision FBO tracking and resolution management
  * - Robust CORS and blob/imageBitmap loading
  */
@@ -30,8 +30,8 @@ interface Framebuffer {
   height: number;
 }
 
-// Size for blur operations
-const BLUR_SIZE = 160;
+// Size for blur operations (small = fast)
+const BLUR_SIZE = 128;
 
 const VERTEX_SHADER = `
   attribute vec2 a_position;
@@ -136,21 +136,26 @@ const DOMAIN_WARP_SHADER = `
 
   void main() {
     vec2 uv = v_texCoord;
-    float t = u_time * 0.08;
+    float t = u_time * 0.05;
 
-    // Multi-octave organic fluid domain warp
-    vec2 q = vec2(
-      snoise(uv * 0.5 + vec2(t * 0.6, t * 0.4)),
-      snoise(uv * 0.5 + vec2(-t * 0.5, t * 0.7) + vec2(43.12, 17.89))
-    );
+    vec2 center = uv - 0.5;
+    float centerWeight = 1.0 - smoothstep(0.0, 0.7, length(center));
 
-    vec2 r = vec2(
-      snoise(uv * 1.1 + q * 0.7 + vec2(t * 0.9, -t * 0.7)),
-      snoise(uv * 1.1 + q * 0.7 + vec2(-t * 0.6, t * 1.0) + vec2(92.41, 61.27))
-    );
+    // Large-scale movement (slow, big blobs)
+    float n1 = snoise(uv * 0.35 + vec2(t, t * 0.7));
+    float n2 = snoise(uv * 0.35 + vec2(-t * 0.8, t * 0.5) + vec2(50.0, 50.0));
 
-    vec2 warp = (q * 0.6 + r * 0.4);
-    vec2 warpedUV = uv + warp * (u_intensity * 0.28);
+    // Medium-scale detail (adds organic movement)
+    float n3 = snoise(uv * 0.9 + vec2(t * 1.2, -t) + vec2(100.0, 0.0));
+    float n4 = snoise(uv * 0.9 + vec2(-t, t * 1.1) + vec2(0.0, 100.0));
+
+    // Combine two octaves
+    vec2 warp = vec2(
+      n1 * 0.65 + n3 * 0.35,
+      n2 * 0.65 + n4 * 0.35
+    ) * centerWeight;
+
+    vec2 warpedUV = uv + warp * u_intensity;
     warpedUV = clamp(warpedUV, 0.0, 1.0);
 
     gl_FragColor = texture2D(u_texture, warpedUV);
@@ -290,11 +295,11 @@ export class Kawarp {
     this.canvas = canvas;
 
     const gl = canvas.getContext("webgl", {
-      alpha: false,
+      alpha: true,
       antialias: false,
       depth: false,
       stencil: false,
-      preserveDrawingBuffer: false,
+      preserveDrawingBuffer: true,
       powerPreference: "high-performance",
     });
     if (!gl) throw new Error("WebGL not supported");
@@ -304,15 +309,15 @@ export class Kawarp {
     this.halfFloatLinearExt = gl.getExtension("OES_texture_half_float_linear");
 
     this._warpIntensity = options.warpIntensity ?? 1.0;
-    this._blurPasses = options.blurPasses ?? 4;
+    this._blurPasses = options.blurPasses ?? 8;
     this._animationSpeed = options.animationSpeed ?? 1.0;
     this._targetAnimationSpeed = this._animationSpeed;
     this._transitionDuration = options.transitionDuration ?? 1000;
-    this._saturation = options.saturation ?? 1.2;
+    this._saturation = options.saturation ?? 1.5;
     this._tintColor = options.tintColor ?? [0.157, 0.157, 0.235];
     this._tintIntensity = options.tintIntensity ?? 0.15;
     this._dithering = options.dithering ?? 0.008;
-    this._scale = options.scale ?? 1.08;
+    this._scale = options.scale ?? 1.0;
 
     // Create shader programs
     this.blurProgram = this.createProgram(VERTEX_SHADER, KAWASE_BLUR_SHADER);
@@ -630,9 +635,9 @@ export class Kawarp {
       return;
     }
 
-    const temp = this.currentAlbumFBO;
+    const previousAlbumFBO = this.currentAlbumFBO;
     this.currentAlbumFBO = this.nextAlbumFBO;
-    this.nextAlbumFBO = temp;
+    this.nextAlbumFBO = previousAlbumFBO;
 
     this.blurSourceInto(this.nextAlbumFBO);
     this.isTransitioning = true;
@@ -673,9 +678,9 @@ export class Kawarp {
       gl.bindTexture(gl.TEXTURE_2D, readFBO.texture);
       gl.uniform1f(this.uniforms.blur.offset, i + 0.5);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
-      const temp = readFBO;
+      const swap = readFBO;
       readFBO = writeFBO;
-      writeFBO = temp;
+      writeFBO = swap;
     }
 
     // Step 3: Copy final blur result to target FBO
