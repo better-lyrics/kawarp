@@ -154,6 +154,8 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    let cancelled = false;
+
     const kawarp = new KawarpCore(canvas, {
       warpIntensity,
       blurPasses,
@@ -174,10 +176,12 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
       kawarp
         .loadImage(src)
         .then(() => {
+          if (cancelled) return;
           onLoad?.();
           if (autoPlay) kawarp.start();
         })
         .catch((error) => {
+          if (cancelled) return;
           onError?.(error instanceof Error ? error : new Error(String(error)));
         });
     } else if (autoPlay) {
@@ -185,6 +189,7 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
     }
 
     return () => {
+      cancelled = true;
       kawarp.dispose();
       kawarpRef.current = null;
       initializedRef.current = false;
