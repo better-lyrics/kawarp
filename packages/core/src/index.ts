@@ -236,6 +236,7 @@ export class Kawarp {
   private lastFrameTime: number = 0;
   private accumulatedTime: number = 0;
   private isPlaying = false;
+  private disposed = false;
 
   // Transition state
   private isTransitioning = false;
@@ -535,6 +536,8 @@ export class Kawarp {
       });
     }
 
+    if (this.disposed) return;
+
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.sourceTexture);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
@@ -592,6 +595,10 @@ export class Kawarp {
 
   async loadBlob(blob: Blob): Promise<void> {
     const bitmap = await createImageBitmap(blob);
+    if (this.disposed) {
+      bitmap.close();
+      return;
+    }
     this.loadImageElement(bitmap);
     bitmap.close();
   }
@@ -722,7 +729,7 @@ export class Kawarp {
   }
 
   start(): void {
-    if (this.isPlaying) return;
+    if (this.disposed || this.isPlaying) return;
     this.isPlaying = true;
     this.lastFrameTime = performance.now();
     this.animationId = requestAnimationFrame(this.renderLoop);
@@ -751,6 +758,8 @@ export class Kawarp {
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.stop();
     const gl = this.gl;
 
@@ -787,7 +796,7 @@ export class Kawarp {
    * Just: blend album FBOs → domain warp → output
    */
   private render(time: number, timestamp = performance.now()): void {
-    if (!this.hasImage) return;
+    if (this.disposed || !this.hasImage) return;
 
     const gl = this.gl;
     const width = Math.max(1, this.canvas.width);
