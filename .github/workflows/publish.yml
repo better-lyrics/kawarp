@@ -14,16 +14,26 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
+      id-token: write
 
     steps:
+      - name: Generate harmonizer bot token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token || github.token }}
 
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
@@ -32,14 +42,24 @@ jobs:
       - name: Build packages
         run: pnpm build
 
-      - name: Create Release Pull Request or Publish
-        id: changesets
-        uses: changesets/action@v1
-        with:
-          publish: pnpm changeset publish --no-git-tag
-          version: pnpm changeset version
-          title: "chore: version packages"
-          commit: "chore: version packages"
+      - name: Set committer identity
+        run: |
+          if [ -n "${{ steps.app-token.outputs.app-slug }}" ]; then
+            git config user.name "${{ steps.app-token.outputs.app-slug }}[bot]"
+            git config user.email "248079304+${{ steps.app-token.outputs.app-slug }}[bot]@users.noreply.github.com"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          fi
+
+      - name: Version and publish
+        run: |
+          pnpm changeset version
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -m "chore: version packages [skip ci]"
+            git push origin HEAD:master
+          fi
+          pnpm changeset publish --no-git-tag
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
