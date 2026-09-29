@@ -8,7 +8,9 @@ import {
   createArtworkCanvas,
   createCanvas,
   createSolidCanvas,
+  createSplitCanvas,
   decodeHalfFloat,
+  pixelAt,
   type Rgb,
   readCanvasPixels,
 } from "./helpers";
@@ -154,6 +156,27 @@ describe("option ranges", () => {
     expect(instance.blurPasses).toBe(0);
     instance.blurPasses = -3;
     expect(instance.blurPasses).toBe(0);
+  });
+
+  it("keeps hard edges sharper with zero blur passes than with the default", () => {
+    const edgeRedness = (blurPasses: number) => {
+      const canvas = createCanvas(64, 64);
+      const instance = new Kawarp(canvas, {
+        blurPasses,
+        saturation: 1,
+        tintIntensity: 0,
+        dithering: 0,
+        warpIntensity: 0,
+      });
+      instance.loadImageElement(
+        createSplitCanvas([230, 20, 20], [20, 20, 230]),
+      );
+      instance.renderFrame(1);
+      const [red, , blue] = pixelAt(readCanvasPixels(canvas), 32, 28);
+      instance.dispose();
+      return Math.abs(red - blue);
+    };
+    expect(edgeRedness(0)).toBeGreaterThan(edgeRedness(8) + 40);
   });
 
   it("accepts animation speeds from 0 to 16", () => {

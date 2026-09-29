@@ -78,6 +78,33 @@ export const createSolidCanvas = (color: Rgb, size = 32): HTMLCanvasElement => {
   return canvas;
 };
 
+export const createSplitCanvas = (top: Rgb, bottom: Rgb, size = 64) => {
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("2D canvas unavailable");
+  paintSplit(top, bottom)(context, size, size);
+  return canvas;
+};
+
+export const createCheckerboardCanvas = (size = 256): HTMLCanvasElement => {
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("2D canvas unavailable");
+  const image = context.createImageData(size, size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const value = (x + y) % 2 === 0 ? 255 : 0;
+      image.data.set([value, value, value, 255], (y * size + x) * 4);
+    }
+  }
+  context.putImageData(image, 0, 0);
+  return canvas;
+};
+
 export type FramePainter = (
   context: CanvasRenderingContext2D,
   width: number,

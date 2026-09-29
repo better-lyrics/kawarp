@@ -48,7 +48,7 @@ function App() {
 
 ## With Video
 
-Pass a playing `<video>` element and the background follows it instead of `src`. Clear `video` and it goes back to `src`.
+Pass a playing `<video>` element and the background follows it instead of `src`. Until the video's first frame arrives, `src` shows as a poster. Clear `video` and it goes back to `src`.
 
 ```jsx
 import { useState } from 'react';

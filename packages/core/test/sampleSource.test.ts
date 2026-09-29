@@ -3,6 +3,7 @@ import { Kawarp, type KawarpContextOptions } from "../src/index";
 import {
   colorDistance,
   createCanvas,
+  createCheckerboardCanvas,
   createSolidCanvas,
   createVideoSource,
   paintSolid,
@@ -63,6 +64,26 @@ describe.each(CONTEXTS)("sampleSource on %s", (_name, contextOptions) => {
     const pixels = await instance.sampleSource(16);
     expect(pixels).toHaveLength(16 * 16 * 4);
     expect(everyPixelNear(pixels as Uint8Array, VIOLET, 10)).toBe(true);
+  });
+
+  it("averages fine detail instead of aliasing", async () => {
+    const instance = createKawarp(contextOptions);
+    instance.loadImageElement(createCheckerboardCanvas(256));
+    const pixels = await instance.sampleSource(8);
+    expect(everyPixelNear(pixels as Uint8Array, [128, 128, 128], 24)).toBe(
+      true,
+    );
+  });
+
+  it("returns the requested size when calls with different sizes overlap", async () => {
+    const instance = createKawarp(contextOptions);
+    instance.loadImageElement(createSolidCanvas(AMBER));
+    const [small, large] = await Promise.all([
+      instance.sampleSource(8),
+      instance.sampleSource(16),
+    ]);
+    expect(small).toHaveLength(8 * 8 * 4);
+    expect(large).toHaveLength(16 * 16 * 4);
   });
 
   it("clamps the size to the blur resolution", async () => {

@@ -96,7 +96,7 @@ kawarp.start();
 kawarp.unloadVideo();
 ```
 
-Calling `loadVideo` again with the same element just updates the options. Loading an image replaces the video. A stopped instance skips frames from a playing video, but it still redraws after you seek a paused one, so scrubbing works.
+Calling `loadVideo` again with the same element just updates the options. Loading an image replaces the video, except for an image load that was already in flight: it shows as a poster until the video's first frame arrives, and is dropped if that frame is already on screen. A stopped instance skips frames from a playing video, but it still redraws after you seek a paused one, so scrubbing works.
 
 `loadVideo` needs `requestVideoFrameCallback` (Chrome 83, Firefox 132, Safari 15.4) and throws without it. The video must be same-origin or served with CORS headers.
 

@@ -77,6 +77,15 @@ const boundedOption = (
     ? Math.min(max, Math.max(min, value))
     : fallback;
 
+const textureSourceSize = (source: TexImageSource): [number, number] => {
+  if ("naturalWidth" in source)
+    return [source.naturalWidth, source.naturalHeight];
+  if ("videoWidth" in source) return [source.videoWidth, source.videoHeight];
+  if ("displayWidth" in source)
+    return [source.displayWidth, source.displayHeight];
+  return [source.width, source.height];
+};
+
 type FloatDrawingBufferContext = WebGL2RenderingContext & {
   drawingBufferStorage?: (
     internalFormat: number,
@@ -270,18 +279,26 @@ const DOWNSAMPLE_SHADER = `
   }
 `;
 
+// Moves at least one storage step toward the target, so half-float and 8-bit
+// history cannot stall short of it when the per-frame response is tiny
 const SMOOTHING_SHADER = `
   precision highp float;
   uniform sampler2D u_texture;
   uniform sampler2D u_history;
   uniform float u_response;
+  uniform float u_minStep;
   varying vec2 v_texCoord;
 
   void main() {
+    vec4 history = texture2D(u_history, v_texCoord);
+    vec4 current = texture2D(u_texture, v_texCoord);
+    vec4 blended = mix(history, current, u_response);
+    vec4 remaining = current - history;
+    vec4 minimal = history + sign(remaining) * min(abs(remaining), vec4(u_minStep));
     gl_FragColor = mix(
-      texture2D(u_history, v_texCoord),
-      texture2D(u_texture, v_texCoord),
-      u_response
+      minimal,
+      blended,
+      step(abs(minimal - history), abs(blended - history))
     );
   }
 `;
@@ -297,6 +314,7 @@ interface SamplingPrograms {
     texture: WebGLUniformLocation;
     history: WebGLUniformLocation;
     response: WebGLUniformLocation;
+    minStep: WebGLUniformLocation;
   };
 }
 
@@ -357,16 +375,21 @@ export class Kawarp {
 
   // WebGL2 high-precision state (null/false on the default WebGL1 path)
   private gl2: WebGL2RenderingContext | null;
-  private floatRenderTargets = false;
+  private halfFloatRenderTargets = false;
+  private float32RenderTargets = false;
   private floatLinearFiltering = false;
   private _highPrecisionOutput = false;
 
   // Texture the blur reads from: the image source or the latest video frame
   private activeSourceTexture: WebGLTexture;
+  private imageSourceWidth = 0;
+  private imageSourceHeight = 0;
+  private videoFrameWidth = 0;
+  private videoFrameHeight = 0;
 
   // Video source state
   private video: HTMLVideoElement | null = null;
-  // Image loads that finish after a later loadVideo call are dropped
+  // Lets image loads detect a loadVideo call made while they were in flight
   private videoLoadCount = 0;
   private videoOptions: Required<Omit<KawarpVideoOptions, "onError">> &
     Pick<KawarpVideoOptions, "onError"> = { ...DEFAULT_VIDEO_OPTIONS };
@@ -376,6 +399,10 @@ export class Kawarp {
   private videoHistory: Framebuffer[] = [];
   private videoHistoryIndex = 0;
   private hasVideoHistory = false;
+  // Smallest change the history format can store; 0 for float32
+  private videoHistoryStep = 0;
+  // Ideal time of the last sample on the frameRate cadence
+  private videoSampleSlot = 0;
   private videoTargetsStale = true;
   private videoSourceWidth = 0;
   private videoSourceHeight = 0;
@@ -385,7 +412,9 @@ export class Kawarp {
   private videoFramePending = false;
   private retainedVideoFrame: Framebuffer | null = null;
   private samplingPrograms: SamplingPrograms | null = null;
-  private sampleTarget: Framebuffer | null = null;
+  private sampleTargets: Framebuffer[] = [];
+  private sampleTargetsLayout: [number, number, number] = [0, 0, 0];
+  private pendingSampleSize = 0;
   private samplePixelBuffer: WebGLBuffer | null = null;
   private pendingSample: Promise<Uint8Array | null> | null = null;
 
@@ -453,7 +482,10 @@ export class Kawarp {
     this.halfFloatExt = gl.getExtension("OES_texture_half_float");
     this.halfFloatLinearExt = gl.getExtension("OES_texture_half_float_linear");
     if (gl2) {
-      this.floatRenderTargets = !!gl2.getExtension("EXT_color_buffer_float");
+      this.float32RenderTargets = !!gl2.getExtension("EXT_color_buffer_float");
+      this.halfFloatRenderTargets =
+        this.float32RenderTargets ||
+        !!gl2.getExtension("EXT_color_buffer_half_float");
       this.floatLinearFiltering = !!gl2.getExtension(
         "OES_texture_float_linear",
       );
@@ -552,7 +584,7 @@ export class Kawarp {
 
   /** Whether video sampling and blur use WebGL2 float render targets */
   get highPrecisionInput(): boolean {
-    return this.floatRenderTargets;
+    return this.halfFloatRenderTargets;
   }
 
   // Getters and setters
@@ -699,7 +731,8 @@ export class Kawarp {
       });
     }
 
-    if (this.disposed || this.videoLoadCount !== videoLoadsAtStart) {
+    const posterForVideo = this.videoLoadCount !== videoLoadsAtStart;
+    if (this.disposed || (posterForVideo && !this.isAwaitingVideoFrame())) {
       if ("close" in bitmap) bitmap.close();
       return;
     }
@@ -708,6 +741,7 @@ export class Kawarp {
     gl.bindTexture(gl.TEXTURE_2D, this.sourceTexture);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+    [this.imageSourceWidth, this.imageSourceHeight] = textureSourceSize(bitmap);
     if (
       "close" in bitmap &&
       typeof (bitmap as ImageBitmap).close === "function"
@@ -715,10 +749,17 @@ export class Kawarp {
       (bitmap as ImageBitmap).close();
     }
 
-    this.processNewImage();
+    this.processNewImage(this.sourceTexture, posterForVideo);
   }
 
   loadImageElement(source: TexImageSource): void {
+    this.showImageElement(source, false);
+  }
+
+  private showImageElement(
+    source: TexImageSource,
+    posterForVideo: boolean,
+  ): void {
     this.gl.bindTexture(this.gl.TEXTURE_2D, this.sourceTexture);
     this.gl.texImage2D(
       this.gl.TEXTURE_2D,
@@ -728,7 +769,8 @@ export class Kawarp {
       this.gl.UNSIGNED_BYTE,
       source,
     );
-    this.processNewImage();
+    [this.imageSourceWidth, this.imageSourceHeight] = textureSourceSize(source);
+    this.processNewImage(this.sourceTexture, posterForVideo);
   }
 
   loadImageData(
@@ -748,6 +790,8 @@ export class Kawarp {
       this.gl.UNSIGNED_BYTE,
       data instanceof Uint8ClampedArray ? new Uint8Array(data.buffer) : data,
     );
+    this.imageSourceWidth = width;
+    this.imageSourceHeight = height;
     this.processNewImage();
   }
 
@@ -758,11 +802,12 @@ export class Kawarp {
   async loadBlob(blob: Blob): Promise<void> {
     const videoLoadsAtStart = this.videoLoadCount;
     const bitmap = await createImageBitmap(blob);
-    if (this.disposed || this.videoLoadCount !== videoLoadsAtStart) {
+    const posterForVideo = this.videoLoadCount !== videoLoadsAtStart;
+    if (this.disposed || (posterForVideo && !this.isAwaitingVideoFrame())) {
       bitmap.close();
       return;
     }
-    this.loadImageElement(bitmap);
+    this.showImageElement(bitmap, posterForVideo);
     bitmap.close();
   }
 
@@ -826,6 +871,7 @@ export class Kawarp {
       this.video = video;
       this.videoFrameShown = false;
       this.hasVideoHistory = false;
+      this.videoSampleSlot = 0;
     }
 
     const nextOptions = {
@@ -897,6 +943,7 @@ export class Kawarp {
       video.cancelVideoFrameCallback(this.videoCallbackId);
       this.videoCallbackId = null;
     }
+    video.removeEventListener("pause", this.resumeVideoCallbacks);
     this.video = null;
     this.videoFramePending = false;
     this.releaseVideoTargets();
@@ -914,17 +961,24 @@ export class Kawarp {
    */
   sampleSource(size = 32): Promise<Uint8Array | null> {
     if (this.disposed || !this.hasImage) return Promise.resolve(null);
-    if (this.pendingSample) return this.pendingSample;
+    const edge = Math.round(boundedOption(size, 32, 1, BLUR_SIZE));
+    if (this.pendingSample) {
+      return this.pendingSampleSize === edge
+        ? this.pendingSample
+        : this.pendingSample.then(() => this.sampleSource(edge));
+    }
 
     const gl = this.gl;
-    const edge = Math.round(boundedOption(size, 32, 1, BLUR_SIZE));
-    if (this.sampleTarget?.width !== edge) {
-      if (this.sampleTarget) this.deleteFramebuffer(this.sampleTarget);
-      this.sampleTarget = this.gl2
-        ? this.createSizedFramebuffer(edge, edge, this.gl2.RGBA8)
-        : this.createFramebuffer(edge, edge);
+    const [sourceWidth, sourceHeight] =
+      this.activeSourceTexture === this.sourceTexture
+        ? [this.imageSourceWidth, this.imageSourceHeight]
+        : [this.videoFrameWidth, this.videoFrameHeight];
+    this.prepareSampleTargets(sourceWidth, sourceHeight, edge);
+    let sampledTexture = this.activeSourceTexture;
+    for (const stage of this.sampleTargets) {
+      this.drawDownsample(sampledTexture, stage);
+      sampledTexture = stage.texture;
     }
-    this.drawDownsample(this.activeSourceTexture, this.sampleTarget);
 
     const pixels = new Uint8Array(edge * edge * 4);
     const gl2 = this.gl2;
@@ -970,7 +1024,45 @@ export class Kawarp {
       this.pendingSample = null;
     });
     this.pendingSample = sample;
+    this.pendingSampleSize = edge;
     return sample;
+  }
+
+  /**
+   * Halving stages from the source down to size x size. A single 4-tap
+   * reduction from full-resolution artwork would skip most texels and alias.
+   */
+  private prepareSampleTargets(
+    sourceWidth: number,
+    sourceHeight: number,
+    edge: number,
+  ): void {
+    const [cachedWidth, cachedHeight, cachedEdge] = this.sampleTargetsLayout;
+    if (
+      sourceWidth === cachedWidth &&
+      sourceHeight === cachedHeight &&
+      edge === cachedEdge
+    ) {
+      return;
+    }
+    for (const target of this.sampleTargets) this.deleteFramebuffer(target);
+    this.sampleTargets = [];
+
+    let width = sourceWidth;
+    let height = sourceHeight;
+    while (width > edge * 2 || height > edge * 2) {
+      width = Math.max(edge, Math.ceil(width / 2));
+      height = Math.max(edge, Math.ceil(height / 2));
+      this.sampleTargets.push(this.createByteFramebuffer(width, height));
+    }
+    this.sampleTargets.push(this.createByteFramebuffer(edge, edge));
+    this.sampleTargetsLayout = [sourceWidth, sourceHeight, edge];
+  }
+
+  private createByteFramebuffer(width: number, height: number): Framebuffer {
+    return this.gl2
+      ? this.createSizedFramebuffer(width, height, this.gl2.RGBA8)
+      : this.createFramebuffer(width, height);
   }
 
   private requestVideoFrame(): void {
@@ -987,21 +1079,28 @@ export class Kawarp {
     this.videoCallbackId = null;
     const video = this.video;
     if (!video || this.disposed) return;
-    this.requestVideoFrame();
 
+    // Stay idle until start(), but wake on pause so a paused seek still redraws
     if (!this.isPlaying && !video.paused) {
       this.videoFramePending = true;
+      video.addEventListener("pause", this.resumeVideoCallbacks, {
+        once: true,
+      });
       return;
     }
+    this.requestVideoFrame();
+
     const { frameRate } = this.videoOptions;
-    if (
-      frameRate > 0 &&
-      !video.paused &&
-      now - this.videoFrameTime < 1000 / frameRate - 0.5
-    ) {
-      return;
+    if (frameRate > 0 && !video.paused) {
+      const interval = 1000 / frameRate;
+      // Slack keeps jittery frame timing from halving the rate
+      if (now < this.videoSampleSlot + interval * 0.75) return;
     }
     this.processVideoFrame(now, metadata.mediaTime);
+  };
+
+  private resumeVideoCallbacks = (): void => {
+    this.requestVideoFrame();
   };
 
   private processVideoFrame(now: number, mediaTime: number): void {
@@ -1061,8 +1160,19 @@ export class Kawarp {
       this.hasVideoHistory = false;
     }
 
+    const { frameRate } = this.videoOptions;
+    if (frameRate > 0) {
+      const interval = 1000 / frameRate;
+      // Advance on a fixed cadence; restart it after falling behind
+      this.videoSampleSlot =
+        now - this.videoSampleSlot > interval * 2
+          ? now
+          : this.videoSampleSlot + interval;
+    }
     this.videoFrameTime = now;
     this.videoMediaTime = mediaTime;
+    this.videoFrameWidth = this.videoOptions.sampleWidth;
+    this.videoFrameHeight = this.videoOptions.sampleHeight;
     this.showVideoFrame(frameTexture);
   }
 
@@ -1106,10 +1216,10 @@ export class Kawarp {
     );
 
     if (smoothing > 0) {
-      // Float32 history keeps long smoothing from stalling on rounding steps
+      const float32History = !!this.gl2 && this.float32RenderTargets;
       for (let i = 0; i < 2; i++) {
         this.videoHistory.push(
-          this.gl2 && this.floatRenderTargets
+          this.gl2 && float32History
             ? this.createSizedFramebuffer(
                 sampleWidth,
                 sampleHeight,
@@ -1118,6 +1228,16 @@ export class Kawarp {
             : this.createFramebuffer(sampleWidth, sampleHeight, true),
         );
       }
+      const halfFloatHistory = this.gl2
+        ? this.halfFloatRenderTargets
+        : !!(this.halfFloatExt && this.halfFloatLinearExt);
+      this.videoHistoryStep = float32History
+        ? this.float32RenderTargets
+          ? 0
+          : 1 / 255
+        : halfFloatHistory
+          ? 1 / 1024
+          : 1 / 255;
     }
 
     this.hasVideoHistory = false;
@@ -1171,6 +1291,7 @@ export class Kawarp {
         texture: gl.getUniformLocation(smoothing, "u_texture")!,
         history: gl.getUniformLocation(smoothing, "u_history")!,
         response: gl.getUniformLocation(smoothing, "u_response")!,
+        minStep: gl.getUniformLocation(smoothing, "u_minStep")!,
       },
     };
     return this.samplingPrograms;
@@ -1213,6 +1334,7 @@ export class Kawarp {
     gl.bindTexture(gl.TEXTURE_2D, source);
     gl.uniform1i(programs.smoothingUniforms.texture, 0);
     gl.uniform1f(programs.smoothingUniforms.response, response);
+    gl.uniform1f(programs.smoothingUniforms.minStep, this.videoHistoryStep);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     return target.texture;
   }
@@ -1221,8 +1343,19 @@ export class Kawarp {
    * Process a new image: blur it and start transition
    * This is the key optimization - blur only runs here, not every frame!
    */
-  private processNewImage(texture: WebGLTexture = this.sourceTexture): void {
-    if (texture === this.sourceTexture) this.unloadVideo();
+  /**
+   * An image load that finishes after a later loadVideo still shows as a poster
+   * while the video has not produced a frame, and is dropped once it has.
+   */
+  private isAwaitingVideoFrame(): boolean {
+    return !!this.video && !this.videoFrameShown;
+  }
+
+  private processNewImage(
+    texture: WebGLTexture = this.sourceTexture,
+    keepVideo = false,
+  ): void {
+    if (texture === this.sourceTexture && !keepVideo) this.unloadVideo();
     this.activeSourceTexture = texture;
     this.releaseRetainedVideoFrame();
 
@@ -1311,9 +1444,13 @@ export class Kawarp {
     if (this.disposed || this.isPlaying) return;
     this.isPlaying = true;
     this.lastFrameTime = performance.now();
-    if (this.videoFramePending && this.video) {
-      this.videoFramePending = false;
-      this.processVideoFrame(this.lastFrameTime, this.video.currentTime);
+    if (this.video) {
+      this.video.removeEventListener("pause", this.resumeVideoCallbacks);
+      this.requestVideoFrame();
+      if (this.videoFramePending) {
+        this.videoFramePending = false;
+        this.processVideoFrame(this.lastFrameTime, this.video.currentTime);
+      }
     }
     this.animationId = requestAnimationFrame(this.renderLoop);
   }
@@ -1349,7 +1486,7 @@ export class Kawarp {
 
     if (this.retainedVideoFrame)
       this.deleteFramebuffer(this.retainedVideoFrame);
-    if (this.sampleTarget) this.deleteFramebuffer(this.sampleTarget);
+    for (const target of this.sampleTargets) this.deleteFramebuffer(target);
     if (this.samplingPrograms) {
       gl.deleteProgram(this.samplingPrograms.downsample);
       gl.deleteProgram(this.samplingPrograms.smoothing);
@@ -1556,7 +1693,7 @@ export class Kawarp {
       return this.createSizedFramebuffer(
         width,
         height,
-        useHighPrecision && this.floatRenderTargets
+        useHighPrecision && this.halfFloatRenderTargets
           ? this.gl2.RGBA16F
           : this.gl2.RGBA8,
       );
@@ -1645,7 +1782,8 @@ export class Kawarp {
       internalFormat !== gl.RGBA8 &&
       gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE
     ) {
-      this.floatRenderTargets = false;
+      if (internalFormat === gl.RGBA32F) this.float32RenderTargets = false;
+      else this.halfFloatRenderTargets = false;
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texImage2D(
@@ -1665,7 +1803,7 @@ export class Kawarp {
 
   private applyFloatDrawingBuffer(): void {
     const gl = this.gl2 as FloatDrawingBufferContext | null;
-    if (!gl?.drawingBufferStorage || !this.floatRenderTargets) return;
+    if (!gl?.drawingBufferStorage || !this.halfFloatRenderTargets) return;
     gl.drawingBufferStorage(
       gl.RGBA16F,
       Math.max(1, this.canvas.width),

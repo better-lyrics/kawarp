@@ -147,20 +147,6 @@ describe("video playback control", () => {
     );
   });
 
-  it("smooths color changes over the configured response time", async () => {
-    const source = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp({ highPrecisionInput: true });
-    instance.loadVideo(source.video, { smoothing: 5000 });
-    instance.start();
-    source.setPainter(paintSolid(TEAL));
-    await settleVideo(source.video);
-    const color = centerPixel(canvas);
-    expect(colorDistance(color, CORAL)).toBeLessThan(
-      colorDistance(color, TEAL),
-    );
-    expect(colorDistance(color, CORAL)).toBeGreaterThan(0);
-  });
-
   it("updates options in place when called again with the same video", async () => {
     const source = await createVideo(paintSolid(CORAL));
     const { instance, canvas } = createKawarp({});
@@ -184,6 +170,35 @@ describe("video playback control", () => {
     instance.start();
     await settleVideo(second.video);
     expect(colorDistance(centerPixel(canvas), BLUE)).toBeLessThan(
+      DECODE_TOLERANCE,
+    );
+  });
+});
+
+describe.each(CONTEXTS)("temporal smoothing on %s", (_name, contextOptions) => {
+  it("smooths color changes over the configured response time", async () => {
+    const source = await createVideo(paintSolid(CORAL));
+    const { instance, canvas } = createKawarp(contextOptions);
+    instance.loadVideo(source.video, { smoothing: 5000 });
+    instance.start();
+    source.setPainter(paintSolid(TEAL));
+    await settleVideo(source.video);
+    const color = centerPixel(canvas);
+    expect(colorDistance(color, CORAL)).toBeLessThan(
+      colorDistance(color, TEAL),
+    );
+    expect(colorDistance(color, CORAL)).toBeGreaterThan(0);
+  });
+
+  it("reaches the target color with a short response time", async () => {
+    const source = await createVideo(paintSolid(CORAL));
+    const { instance, canvas } = createKawarp(contextOptions);
+    instance.loadVideo(source.video, { smoothing: 150 });
+    instance.start();
+    source.setPainter(paintSolid(TEAL));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await settleVideo(source.video);
+    expect(colorDistance(centerPixel(canvas), TEAL)).toBeLessThan(
       DECODE_TOLERANCE,
     );
   });
@@ -243,6 +258,20 @@ describe("unloading and replacing video", () => {
     );
   });
 
+  it("shows an image load as a poster until the video has a frame", async () => {
+    const { instance, canvas } = createKawarp({});
+    const blob = await new Promise<Blob>((resolve, reject) =>
+      createSolidCanvas(BLUE).toBlob((result) =>
+        result ? resolve(result) : reject(new Error("toBlob failed")),
+      ),
+    );
+    const pendingImage = instance.loadBlob(blob);
+    instance.loadVideo(document.createElement("video"));
+    await pendingImage;
+    instance.renderFrame(1);
+    expect(colorDistance(centerPixel(canvas), BLUE)).toBeLessThan(3);
+  });
+
   it("crossfades from the current image to the first video frame", async () => {
     const { video } = await createVideo(paintSolid(CORAL));
     const { instance, canvas } = createKawarp({});
@@ -257,12 +286,16 @@ describe("unloading and replacing video", () => {
 
   it("stops following the video after dispose", async () => {
     const source = await createVideo(paintSolid(CORAL));
-    const { instance } = createKawarp({});
+    const { instance, canvas } = createKawarp({});
     instance.loadVideo(source.video);
     instance.start();
     instance.dispose();
     source.setPainter(paintSolid(TEAL));
     await nextVideoFrames(source.video, 4);
+    await nextAnimationFrame();
+    expect(colorDistance(centerPixel(canvas), CORAL)).toBeLessThan(
+      DECODE_TOLERANCE,
+    );
   });
 });
 

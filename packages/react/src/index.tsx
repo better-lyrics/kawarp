@@ -140,6 +140,7 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
   const initializedRef = useRef(false);
   const currentSrcRef = useRef<string | undefined>(undefined);
   const followedVideoRef = useRef(false);
+  const onErrorRef = useRef(onError);
 
   // Expose imperative methods
   useImperativeHandle(
@@ -190,8 +191,8 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
     kawarpRef.current = kawarp;
     initializedRef.current = true;
 
-    // Load initial image if provided and no video takes precedence
-    if (src && !video) {
+    // Load initial image if provided; with a video it shows until the first frame
+    if (src) {
       currentSrcRef.current = src;
       kawarp
         .loadImage(src)
@@ -218,42 +219,33 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-load when src prop changes
+  // Auto-load when src changes; src takes over again once the video is cleared
   useEffect(() => {
-    if (!initializedRef.current || !kawarpRef.current) return;
-    if (src === currentSrcRef.current) return;
+    const kawarp = kawarpRef.current;
+    if (!initializedRef.current || !kawarp) return;
+    const leavingVideo = !video && followedVideoRef.current;
+    followedVideoRef.current = !!video;
+    if (video) {
+      currentSrcRef.current = src;
+      return;
+    }
+    if (src === currentSrcRef.current && !leavingVideo) return;
 
     currentSrcRef.current = src;
-    if (src && !video) {
-      kawarpRef.current
+    if (leavingVideo) kawarp.unloadVideo();
+    if (src) {
+      kawarp
         .loadImage(src)
         .then(() => onLoad?.())
         .catch((error) => {
           onError?.(error instanceof Error ? error : new Error(String(error)));
         });
     }
-  }, [src, onLoad, onError]);
+  }, [src, video, onLoad, onError]);
 
-  // Fall back to src once the video prop is cleared
   useEffect(() => {
-    const kawarp = kawarpRef.current;
-    if (!kawarp) return;
-    if (video) {
-      followedVideoRef.current = true;
-      return;
-    }
-    if (!followedVideoRef.current) return;
-    followedVideoRef.current = false;
-    kawarp.unloadVideo();
-    const fallbackSrc = currentSrcRef.current;
-    if (!fallbackSrc) return;
-    kawarp
-      .loadImage(fallbackSrc)
-      .then(() => onLoad?.())
-      .catch((error) => {
-        onError?.(error instanceof Error ? error : new Error(String(error)));
-      });
-  }, [video]);
+    onErrorRef.current = onError;
+  });
 
   useEffect(() => {
     const kawarp = kawarpRef.current;
@@ -262,10 +254,15 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
       kawarp.loadVideo(video, {
         ...videoOptions,
         onError: (error) =>
-          onError?.(error instanceof Error ? error : new Error(String(error))),
+          onErrorRef.current?.(
+            error instanceof Error ? error : new Error(String(error)),
+          ),
       });
+      if (autoPlay) kawarp.start();
     } catch (error) {
-      onError?.(error instanceof Error ? error : new Error(String(error)));
+      onErrorRef.current?.(
+        error instanceof Error ? error : new Error(String(error)),
+      );
     }
   }, [
     video,
