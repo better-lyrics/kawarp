@@ -66,6 +66,8 @@ const DEFAULT_VIDEO_OPTIONS = {
 
 // A media-time jump larger than this between frames is a seek, not playback.
 const VIDEO_SEEK_THRESHOLD_SECONDS = 0.25;
+// Time constants after the last video frame before easing snaps and goes idle
+const VIDEO_SMOOTHING_SETTLE_RESPONSES = 8;
 
 const boundedOption = (
   value: number | undefined,
@@ -403,6 +405,10 @@ export class Kawarp {
   private videoHistory: Framebuffer[] = [];
   private videoHistoryIndex = 0;
   private hasVideoHistory = false;
+  // Latest downsampled frame the history is easing toward, null once settled
+  private videoSmoothingTarget: WebGLTexture | null = null;
+  private videoSmoothingTargetAt = 0;
+  private videoSmoothedAt = 0;
   // Smallest change the history format can store; 0 for float32
   private videoHistoryStep = 0;
   // Ideal time of the last sample on the frameRate cadence
@@ -1154,16 +1160,27 @@ export class Kawarp {
     }
 
     const { smoothing } = this.videoOptions;
+    let easedByRenderLoop = false;
     if (smoothing > 0) {
       const expectedMediaAdvance = (elapsedMs / 1000) * video.playbackRate;
       const seeked =
         Math.abs(mediaTime - this.videoMediaTime - expectedMediaAdvance) >
         VIDEO_SEEK_THRESHOLD_SECONDS;
-      const response =
-        !this.hasVideoHistory || video.paused || seeked
-          ? 1
-          : 1 - Math.exp(-Math.max(0, elapsedMs) / smoothing);
-      frameTexture = this.drawSmoothing(frameTexture, response);
+      const snap =
+        !this.hasVideoHistory ||
+        !this.videoFrameShown ||
+        !this.isPlaying ||
+        video.paused ||
+        seeked;
+      if (snap) {
+        frameTexture = this.drawSmoothing(frameTexture, 1);
+        this.videoSmoothingTarget = null;
+      } else {
+        if (!this.videoSmoothingTarget) this.videoSmoothedAt = now;
+        this.videoSmoothingTarget = frameTexture;
+        this.videoSmoothingTargetAt = now;
+        easedByRenderLoop = true;
+      }
       this.hasVideoHistory = true;
     } else {
       this.hasVideoHistory = false;
@@ -1182,7 +1199,24 @@ export class Kawarp {
     this.videoMediaTime = mediaTime;
     this.videoFrameWidth = this.videoOptions.sampleWidth;
     this.videoFrameHeight = this.videoOptions.sampleHeight;
-    this.showVideoFrame(frameTexture);
+    if (!easedByRenderLoop) this.showVideoFrame(frameTexture);
+  }
+
+  // Easing per animation frame keeps a low frame rate source from stepping
+  private advanceVideoSmoothing(timestamp: number): void {
+    const target = this.videoSmoothingTarget;
+    if (!target) return;
+    const { smoothing } = this.videoOptions;
+    const settled =
+      timestamp - this.videoSmoothingTargetAt >=
+      smoothing * VIDEO_SMOOTHING_SETTLE_RESPONSES;
+    const elapsedMs = Math.max(0, timestamp - this.videoSmoothedAt);
+    this.videoSmoothedAt = timestamp;
+    const response = settled ? 1 : 1 - Math.exp(-elapsedMs / smoothing);
+    this.activeSourceTexture = this.drawSmoothing(target, response);
+    this.releaseRetainedVideoFrame();
+    this.blurSourceInto(this.nextAlbumFBO);
+    if (settled) this.videoSmoothingTarget = null;
   }
 
   private showVideoFrame(texture: WebGLTexture): void {
@@ -1284,6 +1318,7 @@ export class Kawarp {
     }
     this.videoStages = [];
     this.videoHistory = [];
+    this.videoSmoothingTarget = null;
     this.videoTargetsStale = true;
   }
 
@@ -1542,6 +1577,7 @@ export class Kawarp {
    */
   private render(time: number, timestamp = performance.now()): void {
     if (this.disposed || !this.hasImage) return;
+    this.advanceVideoSmoothing(timestamp);
 
     const gl = this.gl;
     const width = Math.max(1, this.canvas.width);
