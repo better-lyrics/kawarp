@@ -272,6 +272,21 @@ describe("unloading and replacing video", () => {
     expect(colorDistance(centerPixel(canvas), BLUE)).toBeLessThan(3);
   });
 
+  it("keeps an in-flight image when the video is unloaded before its first frame", async () => {
+    const { instance, canvas } = createKawarp({});
+    const blob = await new Promise<Blob>((resolve, reject) =>
+      createSolidCanvas(BLUE).toBlob((result) =>
+        result ? resolve(result) : reject(new Error("toBlob failed")),
+      ),
+    );
+    const pendingImage = instance.loadBlob(blob);
+    instance.loadVideo(document.createElement("video"));
+    instance.unloadVideo();
+    await pendingImage;
+    instance.renderFrame(1);
+    expect(colorDistance(centerPixel(canvas), BLUE)).toBeLessThan(3);
+  });
+
   it("crossfades from the current image to the first video frame", async () => {
     const { video } = await createVideo(paintSolid(CORAL));
     const { instance, canvas } = createKawarp({});
@@ -309,6 +324,24 @@ describe("video option validation", () => {
       downsampleFactor: Number.NaN,
       frameRate: Number.NaN,
       smoothing: Number.NaN,
+    });
+    expect(colorDistance(centerPixel(canvas), TEAL)).toBeLessThan(
+      DECODE_TOLERANCE,
+    );
+  });
+
+  it.each([
+    [1, 1, 1.5],
+    [1, 1, 1.25],
+    [2, 2, 1.4],
+    [128, 1, 1.5],
+  ])("terminates staged downsampling for a %ix%i sample with factor %f", async (sampleWidth, sampleHeight, downsampleFactor) => {
+    const { video } = await createVideo(paintSolid(TEAL));
+    const { instance, canvas } = createKawarp({});
+    instance.loadVideo(video, {
+      sampleWidth,
+      sampleHeight,
+      downsampleFactor,
     });
     expect(colorDistance(centerPixel(canvas), TEAL)).toBeLessThan(
       DECODE_TOLERANCE,

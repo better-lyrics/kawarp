@@ -98,6 +98,8 @@ kawarp.unloadVideo();
 
 Calling `loadVideo` again with the same element just updates the options. Loading an image replaces the video, except for an image load that was already in flight: it shows as a poster until the video's first frame arrives, and is dropped if that frame is already on screen. A stopped instance skips frames from a playing video, but it still redraws after you seek a paused one, so scrubbing works.
 
+Video renders upright. Still images keep the vertically flipped orientation Kawarp has always drawn them in, which the blur mostly hides, so a poster of the same shot turns upside down as it crossfades into the video.
+
 `loadVideo` needs `requestVideoFrameCallback` (Chrome 83, Firefox 132, Safari 15.4) and throws without it. The video must be same-origin or served with CORS headers.
 
 | Video option | Type | Default | Description |
@@ -111,7 +113,7 @@ Calling `loadVideo` again with the same element just updates the options. Loadin
 
 ## Source Sampling
 
-`sampleSource(size?)` resolves to a small RGBA thumbnail (`size` x `size`, 32 by default, rows bottom to top) of the current image or video frame. Use it for cheap measurements like brightness. On WebGL2 the read goes through a pixel buffer and a fence, so it doesn't wait on the GPU. On WebGL1 it's a synchronous read of a few kilobytes.
+`sampleSource(size?)` resolves to a small RGBA thumbnail (`size` x `size`, 32 by default, bottom row of what's drawn first) of the current image or video frame. Use it for cheap measurements like brightness. On WebGL2 the read goes through a pixel buffer and a fence, so it doesn't wait on the GPU. On WebGL1 it's a synchronous read of a few kilobytes.
 
 ```javascript
 const pixels = await kawarp.sampleSource(16);
@@ -123,7 +125,7 @@ Two creation-only options opt into WebGL2. Without them Kawarp uses the same Web
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `highPrecisionInput` | boolean | false | Use float render targets for video sampling and blur |
+| `highPrecisionInput` | boolean | false | Keep float32 color history for smoothed video |
 | `highPrecisionOutput` | boolean | false | Request a float16 drawing buffer, falling back to 8-bit |
 
 ```javascript

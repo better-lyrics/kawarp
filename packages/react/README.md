@@ -92,7 +92,7 @@ function App() {
 | `tintIntensity` | number | 0.15 | Tint effect strength (0-1) |
 | `dithering` | number | 0.008 | Dithering strength (0-0.1) |
 | `scale` | number | 1.0 | Overall zoom level of the effect (0.01-4) |
-| `highPrecisionInput` | boolean | false | WebGL2 float render targets, read on mount only |
+| `highPrecisionInput` | boolean | false | Float32 color history for smoothed video, read on mount only |
 | `highPrecisionOutput` | boolean | false | Float16 drawing buffer, read on mount only |
 
 ## License

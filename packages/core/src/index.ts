@@ -25,7 +25,7 @@ export interface KawarpOptions {
 }
 
 export interface KawarpContextOptions {
-  /** Use WebGL2 float render targets for video sampling and blur. Creation only. */
+  /** Use WebGL2 with float32 color history for smoothed video. Creation only. */
   highPrecisionInput?: boolean;
   /** Request a float16 WebGL2 drawing buffer, falling back to RGBA8. Creation only. */
   highPrecisionOutput?: boolean;
@@ -379,6 +379,7 @@ export class Kawarp {
   private float32RenderTargets = false;
   private floatLinearFiltering = false;
   private _highPrecisionOutput = false;
+  private highPrecisionInputRequested: boolean;
 
   // Texture the blur reads from: the image source or the latest video frame
   private activeSourceTexture: WebGLTexture;
@@ -389,8 +390,10 @@ export class Kawarp {
 
   // Video source state
   private video: HTMLVideoElement | null = null;
-  // Lets image loads detect a loadVideo call made while they were in flight
+  // Let in-flight image loads detect a later loadVideo call, or a video frame
+  // that has since taken the screen
   private videoLoadCount = 0;
+  private videoFirstFrameCount = 0;
   private videoOptions: Required<Omit<KawarpVideoOptions, "onError">> &
     Pick<KawarpVideoOptions, "onError"> = { ...DEFAULT_VIDEO_OPTIONS };
   private videoCallbackId: number | null = null;
@@ -478,6 +481,7 @@ export class Kawarp {
     if (!gl) throw new Error("WebGL not supported");
     this.gl = gl as WebGLRenderingContext;
     this.gl2 = gl2;
+    this.highPrecisionInputRequested = !!gl2 && !!options.highPrecisionInput;
 
     this.halfFloatExt = gl.getExtension("OES_texture_half_float");
     this.halfFloatLinearExt = gl.getExtension("OES_texture_half_float_linear");
@@ -582,9 +586,9 @@ export class Kawarp {
     return this._highPrecisionOutput;
   }
 
-  /** Whether video sampling and blur use WebGL2 float render targets */
+  /** Whether smoothed video keeps float32 color history (requested via highPrecisionInput) */
   get highPrecisionInput(): boolean {
-    return this.halfFloatRenderTargets;
+    return this.highPrecisionInputRequested && this.float32RenderTargets;
   }
 
   // Getters and setters
@@ -709,6 +713,7 @@ export class Kawarp {
   async loadImage(src: string): Promise<void> {
     if (!src) return;
     const videoLoadsAtStart = this.videoLoadCount;
+    const videoFramesAtStart = this.videoFirstFrameCount;
 
     let bitmap: ImageBitmap | HTMLImageElement | null = null;
     try {
@@ -731,11 +736,12 @@ export class Kawarp {
       });
     }
 
-    const posterForVideo = this.videoLoadCount !== videoLoadsAtStart;
-    if (this.disposed || (posterForVideo && !this.isAwaitingVideoFrame())) {
+    if (this.disposed || this.videoFirstFrameCount !== videoFramesAtStart) {
       if ("close" in bitmap) bitmap.close();
       return;
     }
+    const posterForVideo =
+      !!this.video && this.videoLoadCount !== videoLoadsAtStart;
 
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.sourceTexture);
@@ -801,12 +807,14 @@ export class Kawarp {
 
   async loadBlob(blob: Blob): Promise<void> {
     const videoLoadsAtStart = this.videoLoadCount;
+    const videoFramesAtStart = this.videoFirstFrameCount;
     const bitmap = await createImageBitmap(blob);
-    const posterForVideo = this.videoLoadCount !== videoLoadsAtStart;
-    if (this.disposed || (posterForVideo && !this.isAwaitingVideoFrame())) {
+    if (this.disposed || this.videoFirstFrameCount !== videoFramesAtStart) {
       bitmap.close();
       return;
     }
+    const posterForVideo =
+      !!this.video && this.videoLoadCount !== videoLoadsAtStart;
     this.showImageElement(bitmap, posterForVideo);
     bitmap.close();
   }
@@ -853,7 +861,8 @@ export class Kawarp {
   /**
    * Use a playing video as the source. Each decoded frame is imported on the
    * GPU, downsampled in stages, optionally smoothed over time, and blurred in
-   * place. The first frame crossfades from the current image.
+   * place. The first frame crossfades from the current image. Video renders
+   * upright; images keep their historical flipped orientation.
    *
    * Calling again with the same element only updates the options. A stopped
    * instance skips frames from a playing video and draws single frames from a
@@ -954,8 +963,8 @@ export class Kawarp {
   }
 
   /**
-   * Read a small RGBA8 thumbnail (size x size, rows bottom to top) of the
-   * current source, e.g. to measure brightness. WebGL2 reads asynchronously
+   * Read a small RGBA8 thumbnail (size x size, bottom row of the rendered
+   * orientation first) of the current source, e.g. to measure brightness. WebGL2 reads asynchronously
    * through a pixel buffer and fence; WebGL1 reads synchronously.
    * Resolves to null when there is no source or the instance is disposed.
    */
@@ -1183,6 +1192,7 @@ export class Kawarp {
       this.blurSourceInto(this.nextAlbumFBO);
     } else {
       this.videoFrameShown = true;
+      this.videoFirstFrameCount++;
       this.processNewImage(texture);
     }
     if (!this.isPlaying) this.render(this.accumulatedTime);
@@ -1207,8 +1217,18 @@ export class Kawarp {
       width > sampleWidth * downsampleFactor ||
       height > sampleHeight * downsampleFactor
     ) {
-      width = Math.max(sampleWidth, Math.ceil(width / downsampleFactor));
-      height = Math.max(sampleHeight, Math.ceil(height / downsampleFactor));
+      const nextWidth = Math.max(
+        sampleWidth,
+        Math.ceil(width / downsampleFactor),
+      );
+      const nextHeight = Math.max(
+        sampleHeight,
+        Math.ceil(height / downsampleFactor),
+      );
+      // Rounding up can stop shrinking tiny stages; the final stage covers the rest
+      if (nextWidth === width && nextHeight === height) break;
+      width = nextWidth;
+      height = nextHeight;
       this.videoStages.push(this.createFramebuffer(width, height, true));
     }
     this.videoStages.push(
@@ -1216,7 +1236,8 @@ export class Kawarp {
     );
 
     if (smoothing > 0) {
-      const float32History = !!this.gl2 && this.float32RenderTargets;
+      const float32History =
+        this.highPrecisionInputRequested && this.float32RenderTargets;
       for (let i = 0; i < 2; i++) {
         this.videoHistory.push(
           this.gl2 && float32History
@@ -1343,14 +1364,6 @@ export class Kawarp {
    * Process a new image: blur it and start transition
    * This is the key optimization - blur only runs here, not every frame!
    */
-  /**
-   * An image load that finishes after a later loadVideo still shows as a poster
-   * while the video has not produced a frame, and is dropped once it has.
-   */
-  private isAwaitingVideoFrame(): boolean {
-    return !!this.video && !this.videoFrameShown;
-  }
-
   private processNewImage(
     texture: WebGLTexture = this.sourceTexture,
     keepVideo = false,

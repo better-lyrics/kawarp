@@ -141,6 +141,7 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
   const currentSrcRef = useRef<string | undefined>(undefined);
   const followedVideoRef = useRef(false);
   const onErrorRef = useRef(onError);
+  const videoFailedRef = useRef(false);
 
   // Expose imperative methods
   useImperativeHandle(
@@ -219,13 +220,19 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A new video gets a fresh attempt and resumes animation like autoPlay does for src
+  useEffect(() => {
+    videoFailedRef.current = false;
+    if (video && autoPlay) kawarpRef.current?.start();
+  }, [video]);
+
   // Auto-load when src changes; src takes over again once the video is cleared
   useEffect(() => {
     const kawarp = kawarpRef.current;
     if (!initializedRef.current || !kawarp) return;
     const leavingVideo = !video && followedVideoRef.current;
     followedVideoRef.current = !!video;
-    if (video) {
+    if (video && !videoFailedRef.current) {
       currentSrcRef.current = src;
       return;
     }
@@ -249,20 +256,17 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
 
   useEffect(() => {
     const kawarp = kawarpRef.current;
-    if (!kawarp || !video) return;
-    try {
-      kawarp.loadVideo(video, {
-        ...videoOptions,
-        onError: (error) =>
-          onErrorRef.current?.(
-            error instanceof Error ? error : new Error(String(error)),
-          ),
-      });
-      if (autoPlay) kawarp.start();
-    } catch (error) {
+    if (!kawarp || !video || videoFailedRef.current) return;
+    const reportVideoError = (error: unknown) => {
+      videoFailedRef.current = true;
       onErrorRef.current?.(
         error instanceof Error ? error : new Error(String(error)),
       );
+    };
+    try {
+      kawarp.loadVideo(video, { ...videoOptions, onError: reportVideoError });
+    } catch (error) {
+      reportVideoError(error);
     }
   }, [
     video,

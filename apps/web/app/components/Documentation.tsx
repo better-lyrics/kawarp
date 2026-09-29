@@ -82,7 +82,7 @@ const OPTIONS = [
     name: "highPrecisionInput",
     type: "boolean",
     default: "false",
-    desc: "WebGL2 float render targets (creation only)",
+    desc: "Float32 history for smoothed video (creation only)",
   },
   {
     name: "highPrecisionOutput",

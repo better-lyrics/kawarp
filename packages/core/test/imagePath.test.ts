@@ -111,6 +111,11 @@ describe("high-precision contexts", () => {
     expect(instance.highPrecisionOutput).toBe(false);
   });
 
+  it("does not report float32 input when only highPrecisionOutput is requested", () => {
+    const instance = new Kawarp(createCanvas(), { highPrecisionOutput: true });
+    expect(instance.highPrecisionInput).toBe(false);
+  });
+
   it("allocates a float16 drawing buffer when highPrecisionOutput is requested", () => {
     const canvas = createCanvas();
     const instance = new Kawarp(canvas, { highPrecisionOutput: true });
