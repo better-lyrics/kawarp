@@ -84,7 +84,7 @@ function App() {
 
 ## Video
 
-Kawarp can use a playing `<video>` as its source. Every decoded frame is shrunk to a small color map on the GPU and blurred in place, so the background moves with the video. The first frame crossfades from whatever was on screen.
+Kawarp can use a playing `<video>` as its source. Every decoded frame is shrunk to a small color map on the GPU and blurred in place, so the background moves with the video. The first frame crossfades from whatever was on screen, or replaces it at once if the instance is stopped.
 
 ```javascript
 const video = document.querySelector('video');

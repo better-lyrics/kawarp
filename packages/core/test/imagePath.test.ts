@@ -2,7 +2,6 @@ import { Kawarp as BaselineKawarp } from "@kawarp/core-baseline";
 import { afterEach, describe, expect, it } from "vitest";
 import { Kawarp, type KawarpOptions } from "../src/index";
 import {
-  centerPixel,
   colorDistance,
   countDifferentBytes,
   createArtworkCanvas,

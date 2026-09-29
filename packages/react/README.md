@@ -48,7 +48,7 @@ function App() {
 
 ## With Video
 
-Pass a playing `<video>` element and the background follows it instead of `src`. Until the video's first frame arrives, `src` shows as a poster. Clear `video` and it goes back to `src`.
+Pass a playing `<video>` element and the background follows it instead of `src`. Until the video's first frame arrives, `src` shows as a poster. While the video plays, a new `src` waits in reserve instead of replacing it. If the video can't be read, `onError` fires and the component falls back to `src`. Clear `video` and it goes back to `src` too.
 
 ```jsx
 import { useState } from 'react';

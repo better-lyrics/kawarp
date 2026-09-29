@@ -140,6 +140,7 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
   const initializedRef = useRef(false);
   const currentSrcRef = useRef<string | undefined>(undefined);
   const lastVideoRef = useRef<HTMLVideoElement | null | undefined>(undefined);
+  const posterVideoRef = useRef<HTMLVideoElement | null | undefined>(undefined);
   const onLoadRef = useRef(onLoad);
   const onErrorRef = useRef(onError);
   const videoFailedRef = useRef(false);
@@ -196,6 +197,7 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
     // Load initial image if provided; with a video it shows until the first frame
     if (src) {
       currentSrcRef.current = src;
+      posterVideoRef.current = video;
       kawarp
         .loadImage(src)
         .then(() => {
@@ -221,12 +223,6 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // A new video gets a fresh attempt and resumes animation like autoPlay does for src
-  useEffect(() => {
-    videoFailedRef.current = false;
-    if (video && autoPlay) kawarpRef.current?.start();
-  }, [video]);
-
   // Auto-load when src changes; src takes over again once the video is cleared
   useEffect(() => {
     const kawarp = kawarpRef.current;
@@ -240,10 +236,13 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
 
     // While a video is set, src only matters as the poster of a new video or
     // the fallback of a failed one; loading it otherwise would replace the video
+    // Runs before the new video resets videoFailedRef, so a cleared video that
+    // already fell back to src does not load it again
     const shouldLoad = video
       ? srcChanged && (video !== previousVideo || videoFailedRef.current)
-      : srcChanged || leavingVideo;
+      : srcChanged || (leavingVideo && !videoFailedRef.current);
     if (src && shouldLoad) {
+      posterVideoRef.current = video;
       kawarp
         .loadImage(src)
         .then(() => onLoad?.())
@@ -258,9 +257,16 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
     onErrorRef.current = onError;
   });
 
+  // A new video gets a fresh attempt and resumes animation like autoPlay does for src
+  useEffect(() => {
+    videoFailedRef.current = false;
+    if (video && autoPlay) kawarpRef.current?.start();
+  }, [video]);
+
   useEffect(() => {
     const kawarp = kawarpRef.current;
     if (!kawarp || !video || videoFailedRef.current) return;
+    let loadingVideo = true;
     const reportVideoError = (error: unknown) => {
       videoFailedRef.current = true;
       onErrorRef.current?.(
@@ -268,6 +274,8 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
       );
       const fallbackSrc = currentSrcRef.current;
       if (!fallbackSrc || kawarpRef.current !== kawarp) return;
+      // A failure on the first frame leaves the poster requested in this commit on screen
+      if (loadingVideo && posterVideoRef.current === video) return;
       kawarp
         .loadImage(fallbackSrc)
         .then(() => onLoadRef.current?.())
@@ -284,6 +292,7 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
     } catch (error) {
       reportVideoError(error);
     }
+    loadingVideo = false;
   }, [
     video,
     videoOptions?.sampleWidth,

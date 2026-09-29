@@ -3,6 +3,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Kawarp } from "../src/index";
 
+(
+  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
+
 type Rgb = [number, number, number];
 
 const CORAL: Rgb = [220, 70, 60];
@@ -167,6 +171,56 @@ describe("Kawarp video prop", () => {
     });
     await waitForColor(container, AMBER, 3);
     expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads src once when a video fails on mount", async () => {
+    const onLoad = vi.fn();
+    const { container, root } = mount();
+    await act(async () => {
+      root.render(
+        <Kawarp
+          {...COLOR_FAITHFUL}
+          src={solidImageUrl(BLUE)}
+          video={videoWithoutFrameCallbacks()}
+          onLoad={onLoad}
+          onError={() => {}}
+        />,
+      );
+    });
+    await waitForColor(container, BLUE, 3);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(onLoad).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reload src when a failed video is cleared", async () => {
+    const onLoad = vi.fn();
+    const src = solidImageUrl(BLUE);
+    const { container, root } = mount();
+    await act(async () => {
+      root.render(
+        <Kawarp
+          {...COLOR_FAITHFUL}
+          src={src}
+          video={videoWithoutFrameCallbacks()}
+          onLoad={onLoad}
+          onError={() => {}}
+        />,
+      );
+    });
+    await waitForColor(container, BLUE, 3);
+    await act(async () => {
+      root.render(
+        <Kawarp
+          {...COLOR_FAITHFUL}
+          src={src}
+          video={null}
+          onLoad={onLoad}
+          onError={() => {}}
+        />,
+      );
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(onLoad).toHaveBeenCalledTimes(1);
   });
 
   it("loads src changes after the video has failed", async () => {

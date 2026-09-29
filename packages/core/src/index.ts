@@ -393,7 +393,8 @@ export class Kawarp {
   // An in-flight image load is dropped only when a later loadVideo call has
   // since put a video frame on screen
   private videoLoadCount = 0;
-  private videoFirstFrameCount = 0;
+  // videoLoadCount of the last video that put a frame on screen
+  private shownVideoLoad = 0;
   private videoOptions: Required<Omit<KawarpVideoOptions, "onError">> &
     Pick<KawarpVideoOptions, "onError"> = { ...DEFAULT_VIDEO_OPTIONS };
   private videoCallbackId: number | null = null;
@@ -713,7 +714,6 @@ export class Kawarp {
   async loadImage(src: string): Promise<void> {
     if (!src) return;
     const videoLoadsAtStart = this.videoLoadCount;
-    const videoFramesAtStart = this.videoFirstFrameCount;
 
     let bitmap: ImageBitmap | HTMLImageElement | null = null;
     try {
@@ -736,11 +736,7 @@ export class Kawarp {
       });
     }
 
-    if (
-      this.disposed ||
-      (this.videoLoadCount !== videoLoadsAtStart &&
-        this.videoFirstFrameCount !== videoFramesAtStart)
-    ) {
+    if (this.disposed || this.shownVideoLoad > videoLoadsAtStart) {
       if ("close" in bitmap) bitmap.close();
       return;
     }
@@ -811,13 +807,8 @@ export class Kawarp {
 
   async loadBlob(blob: Blob): Promise<void> {
     const videoLoadsAtStart = this.videoLoadCount;
-    const videoFramesAtStart = this.videoFirstFrameCount;
     const bitmap = await createImageBitmap(blob);
-    if (
-      this.disposed ||
-      (this.videoLoadCount !== videoLoadsAtStart &&
-        this.videoFirstFrameCount !== videoFramesAtStart)
-    ) {
+    if (this.disposed || this.shownVideoLoad > videoLoadsAtStart) {
       bitmap.close();
       return;
     }
@@ -869,7 +860,8 @@ export class Kawarp {
   /**
    * Use a playing video as the source. Each decoded frame is imported on the
    * GPU, downsampled in stages, optionally smoothed over time, and blurred in
-   * place. The first frame crossfades from the current image. Video renders
+   * place. The first frame crossfades from the current image (instantly on a
+   * stopped instance). Video renders
    * upright; images keep their historical flipped orientation.
    *
    * Calling again with the same element only updates the options. A stopped
@@ -1200,7 +1192,7 @@ export class Kawarp {
       this.blurSourceInto(this.nextAlbumFBO);
     } else {
       this.videoFrameShown = true;
-      this.videoFirstFrameCount++;
+      this.shownVideoLoad = this.videoLoadCount;
       this.processNewImage(texture);
       // A stopped instance cannot animate the crossfade, so show the frame outright
       if (!this.isPlaying) this.isTransitioning = false;
@@ -1563,8 +1555,13 @@ export class Kawarp {
     // Calculate transition blend factor
     let blendFactor = 1.0;
     if (this.isTransitioning) {
-      const elapsed = timestamp - this.transitionStartTime;
-      blendFactor = Math.min(1.0, elapsed / this._transitionDuration);
+      // A source can arrive after this frame's timestamp (video frame callbacks
+      // run before animation frames); a zero duration must not divide into NaN
+      const elapsed = Math.max(0, timestamp - this.transitionStartTime);
+      blendFactor =
+        this._transitionDuration > 0
+          ? Math.min(1.0, elapsed / this._transitionDuration)
+          : 1.0;
       if (blendFactor >= 1.0) {
         this.isTransitioning = false;
       }

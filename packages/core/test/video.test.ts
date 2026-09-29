@@ -304,6 +304,55 @@ describe("unloading and replacing video", () => {
     expect(colorDistance(centerPixel(canvas), BLUE)).toBeLessThan(3);
   });
 
+  it("regression: never draws a black frame when the first video frame arrives with a zero transition", async () => {
+    const source = await createVideo(paintSolid(CORAL));
+    const { instance, canvas } = createKawarp({});
+    instance.loadImageElement(createSolidCanvas(BLUE));
+    instance.start();
+    const lateVideo = document.createElement("video");
+    lateVideo.muted = true;
+    instance.loadVideo(lateVideo);
+    lateVideo.srcObject = source.video.srcObject;
+    await lateVideo.play();
+
+    let darkest = 255;
+    for (let frame = 0; frame < 20; frame++) {
+      await nextAnimationFrame();
+      darkest = Math.min(darkest, Math.max(...centerPixel(canvas)));
+    }
+    lateVideo.pause();
+    expect(darkest).toBeGreaterThan(20);
+  });
+
+  it("shows an image as the poster of a newer video after an older video's frame appeared mid-load", async () => {
+    const source = await createVideo(paintSolid(CORAL));
+    const { instance, canvas } = createKawarp({});
+    instance.start();
+    const olderVideo = document.createElement("video");
+    olderVideo.muted = true;
+    instance.loadVideo(olderVideo);
+
+    const imageUrl = createSolidCanvas(BLUE).toDataURL();
+    const realFetch = window.fetch;
+    window.fetch = (input, init) =>
+      new Promise((resolve) => setTimeout(resolve, 600)).then(() =>
+        realFetch(input, init),
+      );
+    try {
+      const pendingImage = instance.loadImage(imageUrl);
+      olderVideo.srcObject = source.video.srcObject;
+      await olderVideo.play();
+      await settleVideo(olderVideo);
+      instance.loadVideo(document.createElement("video"));
+      await pendingImage;
+    } finally {
+      window.fetch = realFetch;
+      olderVideo.pause();
+    }
+    await nextAnimationFrame();
+    expect(colorDistance(centerPixel(canvas), BLUE)).toBeLessThan(3);
+  });
+
   it("shows a paused video's first frame on a stopped instance without waiting for a crossfade", async () => {
     const source = await createVideo(paintSolid(CORAL));
     source.video.pause();
