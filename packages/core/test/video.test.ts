@@ -217,6 +217,42 @@ describe.each(CONTEXTS)("temporal smoothing on %s", (_name, contextOptions) => {
       DECODE_TOLERANCE,
     );
   });
+
+  it("regression: keeps easing toward the latest frame between video frames", async () => {
+    const source = await createVideo(paintSolid(CORAL));
+    const { instance, canvas } = createKawarp(contextOptions);
+    instance.loadVideo(source.video, { smoothing: 2000, frameRate: 1 });
+    instance.start();
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    source.setPainter(paintSolid(TEAL));
+
+    let previous = centerPixel(canvas);
+    let changedFrames = 0;
+    const end = performance.now() + 2200;
+    while (performance.now() < end) {
+      await nextAnimationFrame();
+      const current = centerPixel(canvas);
+      if (colorDistance(current, previous) > 0) changedFrames++;
+      previous = current;
+    }
+    expect(changedFrames).toBeGreaterThan(20);
+  });
+
+  it("holds a steady color once easing has settled on an unchanging video", async () => {
+    const source = await createVideo(paintSolid(CORAL));
+    const { instance, canvas } = createKawarp(contextOptions);
+    instance.loadVideo(source.video, { smoothing: 100 });
+    instance.start();
+    source.setPainter(paintSolid(TEAL));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    const settled = centerPixel(canvas);
+    for (let frame = 0; frame < 20; frame++) {
+      await nextAnimationFrame();
+      expect(centerPixel(canvas)).toEqual(settled);
+    }
+    expect(colorDistance(settled, TEAL)).toBeLessThan(DECODE_TOLERANCE);
+  });
 });
 
 describe("unloading and replacing video", () => {
