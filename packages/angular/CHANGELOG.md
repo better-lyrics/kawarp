@@ -1,5 +1,12 @@
 # @kawarp/angular
 
+## 1.1.4
+
+### Patch Changes
+
+- Updated dependencies [326e81c]
+  - @kawarp/core@1.3.1
+
 ## 1.1.3
 
 ### Patch Changes
