@@ -1,4 +1,9 @@
-import { Kawarp as KawarpCore, type KawarpOptions } from "@kawarp/core";
+import {
+  type KawarpContextOptions,
+  Kawarp as KawarpCore,
+  type KawarpOptions,
+  type KawarpVideoOptions,
+} from "@kawarp/core";
 import {
   type CSSProperties,
   forwardRef,
@@ -10,7 +15,11 @@ import {
   useRef,
 } from "react";
 
-export type { KawarpOptions } from "@kawarp/core";
+export type {
+  KawarpContextOptions,
+  KawarpOptions,
+  KawarpVideoOptions,
+} from "@kawarp/core";
 
 export interface KawarpRef {
   /** The underlying Kawarp instance */
@@ -27,13 +36,17 @@ export interface KawarpRef {
   stop: () => void;
 }
 
-export interface KawarpProps extends KawarpOptions {
+export interface KawarpProps extends KawarpOptions, KawarpContextOptions {
   /** Additional class name for the canvas */
   className?: string;
   /** Additional styles for the canvas */
   style?: CSSProperties;
   /** Image URL to load (auto-loads when changed) */
   src?: string;
+  /** Playing video to use as the source; takes precedence over src */
+  video?: HTMLVideoElement | null;
+  /** Sampling options for the video source */
+  videoOptions?: Omit<KawarpVideoOptions, "onError">;
   /** Whether to auto-start animation (default: true) */
   autoPlay?: boolean;
   /** Callback when the image is loaded */
@@ -102,6 +115,8 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
     className,
     style,
     src,
+    video,
+    videoOptions,
     autoPlay = true,
     onLoad,
     onError,
@@ -114,6 +129,8 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
     tintIntensity,
     dithering,
     scale,
+    highPrecisionInput,
+    highPrecisionOutput,
   },
   ref,
 ) {
@@ -122,6 +139,7 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
   const containerRef = useRef<HTMLDivElement>(null);
   const initializedRef = useRef(false);
   const currentSrcRef = useRef<string | undefined>(undefined);
+  const followedVideoRef = useRef(false);
 
   // Expose imperative methods
   useImperativeHandle(
@@ -166,12 +184,14 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
       tintIntensity,
       dithering,
       scale,
+      highPrecisionInput,
+      highPrecisionOutput,
     });
     kawarpRef.current = kawarp;
     initializedRef.current = true;
 
-    // Load initial image if provided
-    if (src) {
+    // Load initial image if provided and no video takes precedence
+    if (src && !video) {
       currentSrcRef.current = src;
       kawarp
         .loadImage(src)
@@ -204,7 +224,7 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
     if (src === currentSrcRef.current) return;
 
     currentSrcRef.current = src;
-    if (src) {
+    if (src && !video) {
       kawarpRef.current
         .loadImage(src)
         .then(() => onLoad?.())
@@ -213,6 +233,48 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
         });
     }
   }, [src, onLoad, onError]);
+
+  // Fall back to src once the video prop is cleared
+  useEffect(() => {
+    const kawarp = kawarpRef.current;
+    if (!kawarp) return;
+    if (video) {
+      followedVideoRef.current = true;
+      return;
+    }
+    if (!followedVideoRef.current) return;
+    followedVideoRef.current = false;
+    kawarp.unloadVideo();
+    const fallbackSrc = currentSrcRef.current;
+    if (!fallbackSrc) return;
+    kawarp
+      .loadImage(fallbackSrc)
+      .then(() => onLoad?.())
+      .catch((error) => {
+        onError?.(error instanceof Error ? error : new Error(String(error)));
+      });
+  }, [video]);
+
+  useEffect(() => {
+    const kawarp = kawarpRef.current;
+    if (!kawarp || !video) return;
+    try {
+      kawarp.loadVideo(video, {
+        ...videoOptions,
+        onError: (error) =>
+          onError?.(error instanceof Error ? error : new Error(String(error))),
+      });
+    } catch (error) {
+      onError?.(error instanceof Error ? error : new Error(String(error)));
+    }
+  }, [
+    video,
+    videoOptions?.sampleWidth,
+    videoOptions?.sampleHeight,
+    videoOptions?.downsampleFactor,
+    videoOptions?.frameRate,
+    videoOptions?.smoothing,
+  ]);
 
   // Memoize tintColor to prevent unnecessary updates
   const stableTintColor = useMemo(

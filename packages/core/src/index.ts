@@ -24,6 +24,28 @@ export interface KawarpOptions {
   scale?: number;
 }
 
+export interface KawarpContextOptions {
+  /** Use WebGL2 float render targets for video sampling and blur. Creation only. */
+  highPrecisionInput?: boolean;
+  /** Request a float16 WebGL2 drawing buffer, falling back to RGBA8. Creation only. */
+  highPrecisionOutput?: boolean;
+}
+
+export interface KawarpVideoOptions {
+  /** Width of the sampled color map (default: 128) */
+  sampleWidth?: number;
+  /** Height of the sampled color map (default: 72) */
+  sampleHeight?: number;
+  /** Largest reduction per downsampling stage (default: 2) */
+  downsampleFactor?: number;
+  /** Maximum frames sampled per second, 0 follows the video (default: 0) */
+  frameRate?: number;
+  /** Temporal color smoothing response in ms, 0 disables it (default: 0) */
+  smoothing?: number;
+  /** Called when a frame cannot be imported; the video is unloaded first */
+  onError?: (error: unknown) => void;
+}
+
 interface Framebuffer {
   framebuffer: WebGLFramebuffer;
   texture: WebGLTexture;
@@ -33,6 +55,36 @@ interface Framebuffer {
 
 // Size for blur operations (small = fast)
 const BLUR_SIZE = 128;
+
+const DEFAULT_VIDEO_OPTIONS = {
+  sampleWidth: 128,
+  sampleHeight: 72,
+  downsampleFactor: 2,
+  frameRate: 0,
+  smoothing: 0,
+};
+
+// A media-time jump larger than this between frames is a seek, not playback.
+const VIDEO_SEEK_THRESHOLD_SECONDS = 0.25;
+
+const boundedOption = (
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number =>
+  typeof value === "number" && Number.isFinite(value)
+    ? Math.min(max, Math.max(min, value))
+    : fallback;
+
+type FloatDrawingBufferContext = WebGL2RenderingContext & {
+  drawingBufferStorage?: (
+    internalFormat: number,
+    width: number,
+    height: number,
+  ) => void;
+  drawingBufferFormat?: number;
+};
 
 const VERTEX_SHADER = `
   attribute vec2 a_position;
@@ -200,6 +252,54 @@ const OUTPUT_SHADER = `
   }
 `;
 
+// Four bilinear taps average a 4x4 source footprint for reductions up to 4x
+const DOWNSAMPLE_SHADER = `
+  precision highp float;
+  uniform sampler2D u_texture;
+  uniform vec2 u_texelSize;
+  varying vec2 v_texCoord;
+
+  void main() {
+    vec2 offset = u_texelSize * 0.25;
+    gl_FragColor = 0.25 * (
+      texture2D(u_texture, v_texCoord + vec2(-offset.x, -offset.y)) +
+      texture2D(u_texture, v_texCoord + vec2(offset.x, -offset.y)) +
+      texture2D(u_texture, v_texCoord + vec2(-offset.x, offset.y)) +
+      texture2D(u_texture, v_texCoord + vec2(offset.x, offset.y))
+    );
+  }
+`;
+
+const SMOOTHING_SHADER = `
+  precision highp float;
+  uniform sampler2D u_texture;
+  uniform sampler2D u_history;
+  uniform float u_response;
+  varying vec2 v_texCoord;
+
+  void main() {
+    gl_FragColor = mix(
+      texture2D(u_history, v_texCoord),
+      texture2D(u_texture, v_texCoord),
+      u_response
+    );
+  }
+`;
+
+interface SamplingPrograms {
+  downsample: WebGLProgram;
+  smoothing: WebGLProgram;
+  downsampleUniforms: {
+    texture: WebGLUniformLocation;
+    texelSize: WebGLUniformLocation;
+  };
+  smoothingUniforms: {
+    texture: WebGLUniformLocation;
+    history: WebGLUniformLocation;
+    response: WebGLUniformLocation;
+  };
+}
+
 export class Kawarp {
   private canvas: HTMLCanvasElement;
   private gl: WebGLRenderingContext;
@@ -255,6 +355,40 @@ export class Kawarp {
   private _scale: number;
   private hasImage = false;
 
+  // WebGL2 high-precision state (null/false on the default WebGL1 path)
+  private gl2: WebGL2RenderingContext | null;
+  private floatRenderTargets = false;
+  private floatLinearFiltering = false;
+  private _highPrecisionOutput = false;
+
+  // Texture the blur reads from: the image source or the latest video frame
+  private activeSourceTexture: WebGLTexture;
+
+  // Video source state
+  private video: HTMLVideoElement | null = null;
+  // Image loads that finish after a later loadVideo call are dropped
+  private videoLoadCount = 0;
+  private videoOptions: Required<Omit<KawarpVideoOptions, "onError">> &
+    Pick<KawarpVideoOptions, "onError"> = { ...DEFAULT_VIDEO_OPTIONS };
+  private videoCallbackId: number | null = null;
+  private videoUploadTexture: WebGLTexture | null = null;
+  private videoStages: Framebuffer[] = [];
+  private videoHistory: Framebuffer[] = [];
+  private videoHistoryIndex = 0;
+  private hasVideoHistory = false;
+  private videoTargetsStale = true;
+  private videoSourceWidth = 0;
+  private videoSourceHeight = 0;
+  private videoFrameTime = 0;
+  private videoMediaTime = 0;
+  private videoFrameShown = false;
+  private videoFramePending = false;
+  private retainedVideoFrame: Framebuffer | null = null;
+  private samplingPrograms: SamplingPrograms | null = null;
+  private sampleTarget: Framebuffer | null = null;
+  private samplePixelBuffer: WebGLBuffer | null = null;
+  private pendingSample: Promise<Uint8Array | null> | null = null;
+
   // Cached attribute locations
   private attribs!: {
     position: number;
@@ -293,22 +427,37 @@ export class Kawarp {
     };
   };
 
-  constructor(canvas: HTMLCanvasElement, options: KawarpOptions = {}) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    options: KawarpOptions & KawarpContextOptions = {},
+  ) {
     this.canvas = canvas;
 
-    const gl = canvas.getContext("webgl", {
+    const contextAttributes: WebGLContextAttributes = {
       alpha: true,
       antialias: false,
       depth: false,
       stencil: false,
       preserveDrawingBuffer: true,
       powerPreference: "high-performance",
-    });
+    };
+    const gl2 =
+      options.highPrecisionInput || options.highPrecisionOutput
+        ? canvas.getContext("webgl2", contextAttributes)
+        : null;
+    const gl = gl2 ?? canvas.getContext("webgl", contextAttributes);
     if (!gl) throw new Error("WebGL not supported");
-    this.gl = gl;
+    this.gl = gl as WebGLRenderingContext;
+    this.gl2 = gl2;
 
     this.halfFloatExt = gl.getExtension("OES_texture_half_float");
     this.halfFloatLinearExt = gl.getExtension("OES_texture_half_float_linear");
+    if (gl2) {
+      this.floatRenderTargets = !!gl2.getExtension("EXT_color_buffer_float");
+      this.floatLinearFiltering = !!gl2.getExtension(
+        "OES_texture_float_linear",
+      );
+    }
 
     this._warpIntensity = options.warpIntensity ?? 1.0;
     this._blurPasses = options.blurPasses ?? 8;
@@ -379,6 +528,7 @@ export class Kawarp {
 
     // Create source texture
     this.sourceTexture = this.createTexture();
+    this.activeSourceTexture = this.sourceTexture;
 
     // Create small FBOs for blur operations (high precision to avoid banding)
     this.blurFBO1 = this.createFramebuffer(BLUR_SIZE, BLUR_SIZE, true);
@@ -391,6 +541,18 @@ export class Kawarp {
     const initW = Math.max(1, canvas.width || 640);
     const initH = Math.max(1, canvas.height || 360);
     this.warpFBO = this.createFramebuffer(initW, initH, true);
+
+    if (options.highPrecisionOutput) this.applyFloatDrawingBuffer();
+  }
+
+  /** Whether the drawing buffer is float16 (requested via highPrecisionOutput) */
+  get highPrecisionOutput(): boolean {
+    return this._highPrecisionOutput;
+  }
+
+  /** Whether video sampling and blur use WebGL2 float render targets */
+  get highPrecisionInput(): boolean {
+    return this.floatRenderTargets;
   }
 
   // Getters and setters
@@ -405,7 +567,7 @@ export class Kawarp {
     return this._blurPasses;
   }
   set blurPasses(value: number) {
-    const newValue = Math.max(1, Math.min(40, Math.floor(value)));
+    const newValue = Math.max(0, Math.min(40, Math.floor(value)));
     if (newValue !== this._blurPasses) {
       this._blurPasses = newValue;
       // Re-blur with new pass count if we have an image
@@ -419,7 +581,7 @@ export class Kawarp {
     return this._targetAnimationSpeed;
   }
   set animationSpeed(value: number) {
-    this._targetAnimationSpeed = Math.max(0.1, Math.min(5, value));
+    this._targetAnimationSpeed = Math.max(0, Math.min(16, value));
   }
 
   get transitionDuration(): number {
@@ -514,6 +676,7 @@ export class Kawarp {
   // Image loading methods
   async loadImage(src: string): Promise<void> {
     if (!src) return;
+    const videoLoadsAtStart = this.videoLoadCount;
 
     let bitmap: ImageBitmap | HTMLImageElement | null = null;
     try {
@@ -536,20 +699,19 @@ export class Kawarp {
       });
     }
 
-    if (this.disposed) return;
+    if (this.disposed || this.videoLoadCount !== videoLoadsAtStart) {
+      if ("close" in bitmap) bitmap.close();
+      return;
+    }
 
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.sourceTexture);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
-    gl.texImage2D(
-      gl.TEXTURE_2D,
-      0,
-      gl.RGBA,
-      gl.RGBA,
-      gl.UNSIGNED_BYTE,
-      bitmap,
-    );
-    if ("close" in bitmap && typeof (bitmap as ImageBitmap).close === "function") {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+    if (
+      "close" in bitmap &&
+      typeof (bitmap as ImageBitmap).close === "function"
+    ) {
       (bitmap as ImageBitmap).close();
     }
 
@@ -594,8 +756,9 @@ export class Kawarp {
   }
 
   async loadBlob(blob: Blob): Promise<void> {
+    const videoLoadsAtStart = this.videoLoadCount;
     const bitmap = await createImageBitmap(blob);
-    if (this.disposed) {
+    if (this.disposed || this.videoLoadCount !== videoLoadsAtStart) {
       bitmap.close();
       return;
     }
@@ -643,10 +806,426 @@ export class Kawarp {
   }
 
   /**
+   * Use a playing video as the source. Each decoded frame is imported on the
+   * GPU, downsampled in stages, optionally smoothed over time, and blurred in
+   * place. The first frame crossfades from the current image.
+   *
+   * Calling again with the same element only updates the options. A stopped
+   * instance skips frames from a playing video and draws single frames from a
+   * paused one, so seeking while paused stays visible.
+   */
+  loadVideo(video: HTMLVideoElement, options: KawarpVideoOptions = {}): void {
+    if (this.disposed) return;
+    if (typeof video.requestVideoFrameCallback !== "function") {
+      throw new Error("Video sources require requestVideoFrameCallback");
+    }
+    const isNewVideo = this.video !== video;
+    if (isNewVideo) {
+      this.videoLoadCount++;
+      this.unloadVideo();
+      this.video = video;
+      this.videoFrameShown = false;
+      this.hasVideoHistory = false;
+    }
+
+    const nextOptions = {
+      sampleWidth: Math.round(
+        boundedOption(
+          options.sampleWidth,
+          DEFAULT_VIDEO_OPTIONS.sampleWidth,
+          1,
+          1024,
+        ),
+      ),
+      sampleHeight: Math.round(
+        boundedOption(
+          options.sampleHeight,
+          DEFAULT_VIDEO_OPTIONS.sampleHeight,
+          1,
+          1024,
+        ),
+      ),
+      downsampleFactor: boundedOption(
+        options.downsampleFactor,
+        DEFAULT_VIDEO_OPTIONS.downsampleFactor,
+        1.25,
+        4,
+      ),
+      frameRate: boundedOption(
+        options.frameRate,
+        DEFAULT_VIDEO_OPTIONS.frameRate,
+        0,
+        240,
+      ),
+      smoothing: boundedOption(
+        options.smoothing,
+        DEFAULT_VIDEO_OPTIONS.smoothing,
+        0,
+        10000,
+      ),
+      onError: options.onError,
+    };
+    const previousOptions = this.videoOptions;
+    if (
+      isNewVideo ||
+      nextOptions.sampleWidth !== previousOptions.sampleWidth ||
+      nextOptions.sampleHeight !== previousOptions.sampleHeight ||
+      nextOptions.downsampleFactor !== previousOptions.downsampleFactor ||
+      nextOptions.smoothing > 0 !== previousOptions.smoothing > 0
+    ) {
+      this.videoTargetsStale = true;
+    }
+    this.videoOptions = nextOptions;
+
+    this.requestVideoFrame();
+    if (
+      video.readyState >= video.HAVE_CURRENT_DATA &&
+      (isNewVideo || (video.paused && this.videoTargetsStale))
+    ) {
+      this.processVideoFrame(performance.now(), video.currentTime);
+    }
+  }
+
+  /**
+   * Stop following the video. The last frame stays on screen until the next
+   * image or video is loaded.
+   */
+  unloadVideo(): void {
+    const video = this.video;
+    if (!video) return;
+    if (this.videoCallbackId !== null) {
+      video.cancelVideoFrameCallback(this.videoCallbackId);
+      this.videoCallbackId = null;
+    }
+    this.video = null;
+    this.videoFramePending = false;
+    this.releaseVideoTargets();
+    if (this.videoUploadTexture) {
+      this.gl.deleteTexture(this.videoUploadTexture);
+      this.videoUploadTexture = null;
+    }
+  }
+
+  /**
+   * Read a small RGBA8 thumbnail (size x size, rows bottom to top) of the
+   * current source, e.g. to measure brightness. WebGL2 reads asynchronously
+   * through a pixel buffer and fence; WebGL1 reads synchronously.
+   * Resolves to null when there is no source or the instance is disposed.
+   */
+  sampleSource(size = 32): Promise<Uint8Array | null> {
+    if (this.disposed || !this.hasImage) return Promise.resolve(null);
+    if (this.pendingSample) return this.pendingSample;
+
+    const gl = this.gl;
+    const edge = Math.round(boundedOption(size, 32, 1, BLUR_SIZE));
+    if (this.sampleTarget?.width !== edge) {
+      if (this.sampleTarget) this.deleteFramebuffer(this.sampleTarget);
+      this.sampleTarget = this.gl2
+        ? this.createSizedFramebuffer(edge, edge, this.gl2.RGBA8)
+        : this.createFramebuffer(edge, edge);
+    }
+    this.drawDownsample(this.activeSourceTexture, this.sampleTarget);
+
+    const pixels = new Uint8Array(edge * edge * 4);
+    const gl2 = this.gl2;
+    if (!gl2) {
+      gl.readPixels(0, 0, edge, edge, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      return Promise.resolve(pixels);
+    }
+
+    this.samplePixelBuffer ??= gl2.createBuffer();
+    gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, this.samplePixelBuffer);
+    gl2.bufferData(gl2.PIXEL_PACK_BUFFER, pixels.byteLength, gl2.STREAM_READ);
+    gl2.readPixels(0, 0, edge, edge, gl2.RGBA, gl2.UNSIGNED_BYTE, 0);
+    gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, null);
+    const fence = gl2.fenceSync(gl2.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    if (!fence) return Promise.resolve(null);
+    gl2.flush();
+
+    // Timers keep polling in background tabs, where animation frames stop
+    const sample = new Promise<Uint8Array | null>((resolve) => {
+      const poll = () => {
+        if (this.disposed) {
+          gl2.deleteSync(fence);
+          resolve(null);
+          return;
+        }
+        const status = gl2.clientWaitSync(fence, 0, 0);
+        if (status === gl2.TIMEOUT_EXPIRED) {
+          setTimeout(poll, 4);
+          return;
+        }
+        gl2.deleteSync(fence);
+        if (status === gl2.WAIT_FAILED) {
+          resolve(null);
+          return;
+        }
+        gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, this.samplePixelBuffer);
+        gl2.getBufferSubData(gl2.PIXEL_PACK_BUFFER, 0, pixels);
+        gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, null);
+        resolve(pixels);
+      };
+      setTimeout(poll, 0);
+    }).finally(() => {
+      this.pendingSample = null;
+    });
+    this.pendingSample = sample;
+    return sample;
+  }
+
+  private requestVideoFrame(): void {
+    if (!this.video || this.videoCallbackId !== null) return;
+    this.videoCallbackId = this.video.requestVideoFrameCallback(
+      this.handleVideoFrame,
+    );
+  }
+
+  private handleVideoFrame = (
+    now: DOMHighResTimeStamp,
+    metadata: VideoFrameCallbackMetadata,
+  ): void => {
+    this.videoCallbackId = null;
+    const video = this.video;
+    if (!video || this.disposed) return;
+    this.requestVideoFrame();
+
+    if (!this.isPlaying && !video.paused) {
+      this.videoFramePending = true;
+      return;
+    }
+    const { frameRate } = this.videoOptions;
+    if (
+      frameRate > 0 &&
+      !video.paused &&
+      now - this.videoFrameTime < 1000 / frameRate - 0.5
+    ) {
+      return;
+    }
+    this.processVideoFrame(now, metadata.mediaTime);
+  };
+
+  private processVideoFrame(now: number, mediaTime: number): void {
+    const video = this.video;
+    if (
+      !video ||
+      video.readyState < video.HAVE_CURRENT_DATA ||
+      video.videoWidth === 0 ||
+      video.videoHeight === 0
+    ) {
+      return;
+    }
+    const gl = this.gl;
+    const elapsedMs = now - this.videoFrameTime;
+
+    try {
+      this.prepareVideoTargets(video.videoWidth, video.videoHeight);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.videoUploadTexture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        video,
+      );
+    } catch (error) {
+      const { onError } = this.videoOptions;
+      this.unloadVideo();
+      onError?.(error);
+      return;
+    } finally {
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    }
+
+    let frameTexture = this.videoUploadTexture as WebGLTexture;
+    for (const stage of this.videoStages) {
+      this.drawDownsample(frameTexture, stage);
+      frameTexture = stage.texture;
+    }
+
+    const { smoothing } = this.videoOptions;
+    if (smoothing > 0) {
+      const expectedMediaAdvance = (elapsedMs / 1000) * video.playbackRate;
+      const seeked =
+        Math.abs(mediaTime - this.videoMediaTime - expectedMediaAdvance) >
+        VIDEO_SEEK_THRESHOLD_SECONDS;
+      const response =
+        !this.hasVideoHistory || video.paused || seeked
+          ? 1
+          : 1 - Math.exp(-Math.max(0, elapsedMs) / smoothing);
+      frameTexture = this.drawSmoothing(frameTexture, response);
+      this.hasVideoHistory = true;
+    } else {
+      this.hasVideoHistory = false;
+    }
+
+    this.videoFrameTime = now;
+    this.videoMediaTime = mediaTime;
+    this.showVideoFrame(frameTexture);
+  }
+
+  private showVideoFrame(texture: WebGLTexture): void {
+    if (this.videoFrameShown) {
+      this.activeSourceTexture = texture;
+      this.releaseRetainedVideoFrame();
+      this.blurSourceInto(this.nextAlbumFBO);
+    } else {
+      this.videoFrameShown = true;
+      this.processNewImage(texture);
+    }
+    if (!this.isPlaying) this.render(this.accumulatedTime);
+  }
+
+  private prepareVideoTargets(videoWidth: number, videoHeight: number): void {
+    if (
+      !this.videoTargetsStale &&
+      videoWidth === this.videoSourceWidth &&
+      videoHeight === this.videoSourceHeight
+    ) {
+      return;
+    }
+    this.releaseVideoTargets();
+    this.videoUploadTexture ??= this.createTexture();
+
+    const { sampleWidth, sampleHeight, downsampleFactor, smoothing } =
+      this.videoOptions;
+    let width = videoWidth;
+    let height = videoHeight;
+    while (
+      width > sampleWidth * downsampleFactor ||
+      height > sampleHeight * downsampleFactor
+    ) {
+      width = Math.max(sampleWidth, Math.ceil(width / downsampleFactor));
+      height = Math.max(sampleHeight, Math.ceil(height / downsampleFactor));
+      this.videoStages.push(this.createFramebuffer(width, height, true));
+    }
+    this.videoStages.push(
+      this.createFramebuffer(sampleWidth, sampleHeight, true),
+    );
+
+    if (smoothing > 0) {
+      // Float32 history keeps long smoothing from stalling on rounding steps
+      for (let i = 0; i < 2; i++) {
+        this.videoHistory.push(
+          this.gl2 && this.floatRenderTargets
+            ? this.createSizedFramebuffer(
+                sampleWidth,
+                sampleHeight,
+                this.gl2.RGBA32F,
+              )
+            : this.createFramebuffer(sampleWidth, sampleHeight, true),
+        );
+      }
+    }
+
+    this.hasVideoHistory = false;
+    this.videoSourceWidth = videoWidth;
+    this.videoSourceHeight = videoHeight;
+    this.videoTargetsStale = false;
+  }
+
+  /**
+   * Free video render targets. The one the blur currently reads from is
+   * retained so re-blurring keeps working until another source replaces it.
+   */
+  private releaseVideoTargets(): void {
+    for (const target of [...this.videoStages, ...this.videoHistory]) {
+      if (target.texture === this.activeSourceTexture) {
+        this.releaseRetainedVideoFrame();
+        this.retainedVideoFrame = target;
+      } else {
+        this.deleteFramebuffer(target);
+      }
+    }
+    this.videoStages = [];
+    this.videoHistory = [];
+    this.videoTargetsStale = true;
+  }
+
+  private releaseRetainedVideoFrame(): void {
+    if (
+      !this.retainedVideoFrame ||
+      this.retainedVideoFrame.texture === this.activeSourceTexture
+    ) {
+      return;
+    }
+    this.deleteFramebuffer(this.retainedVideoFrame);
+    this.retainedVideoFrame = null;
+  }
+
+  private getSamplingPrograms(): SamplingPrograms {
+    if (this.samplingPrograms) return this.samplingPrograms;
+    const gl = this.gl;
+    const downsample = this.createProgram(VERTEX_SHADER, DOWNSAMPLE_SHADER);
+    const smoothing = this.createProgram(VERTEX_SHADER, SMOOTHING_SHADER);
+    this.samplingPrograms = {
+      downsample,
+      smoothing,
+      downsampleUniforms: {
+        texture: gl.getUniformLocation(downsample, "u_texture")!,
+        texelSize: gl.getUniformLocation(downsample, "u_texelSize")!,
+      },
+      smoothingUniforms: {
+        texture: gl.getUniformLocation(smoothing, "u_texture")!,
+        history: gl.getUniformLocation(smoothing, "u_history")!,
+        response: gl.getUniformLocation(smoothing, "u_response")!,
+      },
+    };
+    return this.samplingPrograms;
+  }
+
+  private drawDownsample(source: WebGLTexture, target: Framebuffer): void {
+    const gl = this.gl;
+    const programs = this.getSamplingPrograms();
+    gl.useProgram(programs.downsample);
+    this.setupAttributes();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+    gl.viewport(0, 0, target.width, target.height);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, source);
+    gl.uniform1i(programs.downsampleUniforms.texture, 0);
+    gl.uniform2f(
+      programs.downsampleUniforms.texelSize,
+      1 / target.width,
+      1 / target.height,
+    );
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  private drawSmoothing(source: WebGLTexture, response: number): WebGLTexture {
+    const gl = this.gl;
+    const programs = this.getSamplingPrograms();
+    const history = this.videoHistory[this.videoHistoryIndex];
+    this.videoHistoryIndex = 1 - this.videoHistoryIndex;
+    const target = this.videoHistory[this.videoHistoryIndex];
+    if (!history || !target) return source;
+
+    gl.useProgram(programs.smoothing);
+    this.setupAttributes();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+    gl.viewport(0, 0, target.width, target.height);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, history.texture);
+    gl.uniform1i(programs.smoothingUniforms.history, 1);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, source);
+    gl.uniform1i(programs.smoothingUniforms.texture, 0);
+    gl.uniform1f(programs.smoothingUniforms.response, response);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    return target.texture;
+  }
+
+  /**
    * Process a new image: blur it and start transition
    * This is the key optimization - blur only runs here, not every frame!
    */
-  private processNewImage(): void {
+  private processNewImage(texture: WebGLTexture = this.sourceTexture): void {
+    if (texture === this.sourceTexture) this.unloadVideo();
+    this.activeSourceTexture = texture;
+    this.releaseRetainedVideoFrame();
+
     if (!this.hasImage) {
       this.blurSourceInto(this.nextAlbumFBO);
       this.blurSourceInto(this.currentAlbumFBO);
@@ -684,7 +1263,7 @@ export class Kawarp {
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurFBO1.framebuffer);
     gl.viewport(0, 0, BLUR_SIZE, BLUR_SIZE);
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.sourceTexture);
+    gl.bindTexture(gl.TEXTURE_2D, this.activeSourceTexture);
     gl.uniform1i(this.uniforms.tint.texture, 0);
     gl.uniform3fv(this.uniforms.tint.tintColor, this._tintColor);
     gl.uniform1f(this.uniforms.tint.tintIntensity, this._tintIntensity);
@@ -732,6 +1311,10 @@ export class Kawarp {
     if (this.disposed || this.isPlaying) return;
     this.isPlaying = true;
     this.lastFrameTime = performance.now();
+    if (this.videoFramePending && this.video) {
+      this.videoFramePending = false;
+      this.processVideoFrame(this.lastFrameTime, this.video.currentTime);
+    }
     this.animationId = requestAnimationFrame(this.renderLoop);
   }
 
@@ -761,7 +1344,17 @@ export class Kawarp {
     if (this.disposed) return;
     this.disposed = true;
     this.stop();
+    this.unloadVideo();
     const gl = this.gl;
+
+    if (this.retainedVideoFrame)
+      this.deleteFramebuffer(this.retainedVideoFrame);
+    if (this.sampleTarget) this.deleteFramebuffer(this.sampleTarget);
+    if (this.samplingPrograms) {
+      gl.deleteProgram(this.samplingPrograms.downsample);
+      gl.deleteProgram(this.samplingPrograms.smoothing);
+    }
+    this.gl2?.deleteBuffer(this.samplePixelBuffer);
 
     gl.deleteProgram(this.blurProgram);
     gl.deleteProgram(this.blendProgram);
@@ -886,7 +1479,12 @@ export class Kawarp {
     const shader = gl.createShader(type);
     if (!shader) throw new Error("Failed to create shader");
 
-    gl.shaderSource(shader, source);
+    gl.shaderSource(
+      shader,
+      this.gl2 && type === gl.FRAGMENT_SHADER
+        ? `precision highp sampler2D;\n${source}`
+        : source,
+    );
     gl.compileShader(shader);
 
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
@@ -954,6 +1552,16 @@ export class Kawarp {
     height: number,
     useHighPrecision = false,
   ): Framebuffer {
+    if (this.gl2) {
+      return this.createSizedFramebuffer(
+        width,
+        height,
+        useHighPrecision && this.floatRenderTargets
+          ? this.gl2.RGBA16F
+          : this.gl2.RGBA8,
+      );
+    }
+
     const gl = this.gl;
     const texture = this.createTexture();
 
@@ -987,6 +1595,83 @@ export class Kawarp {
       0,
     );
     return { framebuffer, texture, width, height };
+  }
+
+  /**
+   * WebGL2 render target with an explicit internal format. Float formats fall
+   * back to RGBA8 when the driver reports them incomplete.
+   */
+  private createSizedFramebuffer(
+    width: number,
+    height: number,
+    internalFormat: number,
+  ): Framebuffer {
+    const gl = this.gl2 as WebGL2RenderingContext;
+    const texture = this.createTexture();
+    const pixelType =
+      internalFormat === gl.RGBA32F
+        ? gl.FLOAT
+        : internalFormat === gl.RGBA16F
+          ? gl.HALF_FLOAT
+          : gl.UNSIGNED_BYTE;
+    if (internalFormat === gl.RGBA32F && !this.floatLinearFiltering) {
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    }
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      internalFormat,
+      width,
+      height,
+      0,
+      gl.RGBA,
+      pixelType,
+      null,
+    );
+
+    const framebuffer = gl.createFramebuffer();
+    if (!framebuffer) throw new Error("Failed to create framebuffer");
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER,
+      gl.COLOR_ATTACHMENT0,
+      gl.TEXTURE_2D,
+      texture,
+      0,
+    );
+
+    if (
+      internalFormat !== gl.RGBA8 &&
+      gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE
+    ) {
+      this.floatRenderTargets = false;
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA8,
+        width,
+        height,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        null,
+      );
+    }
+    return { framebuffer, texture, width, height };
+  }
+
+  private applyFloatDrawingBuffer(): void {
+    const gl = this.gl2 as FloatDrawingBufferContext | null;
+    if (!gl?.drawingBufferStorage || !this.floatRenderTargets) return;
+    gl.drawingBufferStorage(
+      gl.RGBA16F,
+      Math.max(1, this.canvas.width),
+      Math.max(1, this.canvas.height),
+    );
+    this._highPrecisionOutput = gl.drawingBufferFormat === gl.RGBA16F;
   }
 
   private deleteFramebuffer(fbo: Framebuffer): void {

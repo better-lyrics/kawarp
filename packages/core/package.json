@@ -39,11 +39,16 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch --preserveWatchOutput",
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit && tsc --noEmit -p test",
+    "test": "vitest run"
   },
   "devDependencies": {
+    "@kawarp/core-baseline": "npm:@kawarp/core@1.2.2",
     "@repo/typescript-config": "workspace:*",
     "@types/node": "^22.15.3",
-    "typescript": "5.9.2"
+    "@vitest/browser-playwright": "5.0.2",
+    "playwright": "1.63.0",
+    "typescript": "5.9.2",
+    "vitest": "5.0.2"
   }
 }

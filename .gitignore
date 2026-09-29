@@ -38,3 +38,5 @@ yarn-error.log*
 *.pem
 .angular
 .vscode
+# Vitest browser artifacts
+.vitest
