@@ -14,6 +14,9 @@ const METHODS = [
   { name: "loadImage(url)", desc: "Load image from URL" },
   { name: "loadGradient(colors, angle?)", desc: "Load gradient as source" },
   { name: "loadBlob(blob)", desc: "Load from Blob or File" },
+  { name: "loadVideo(video, options?)", desc: "Follow a playing video" },
+  { name: "unloadVideo()", desc: "Stop following, keep last frame" },
+  { name: "sampleSource(size?)", desc: "Small RGBA thumbnail of the source" },
   { name: "start()", desc: "Start animation" },
   { name: "stop()", desc: "Stop animation" },
   { name: "resize()", desc: "Update dimensions" },
@@ -31,13 +34,13 @@ const OPTIONS = [
     name: "blurPasses",
     type: "number",
     default: "8",
-    desc: "Kawase blur passes (1-40)",
+    desc: "Kawase blur passes (0-40, 0 skips the blur)",
   },
   {
     name: "animationSpeed",
     type: "number",
     default: "1.0",
-    desc: "Animation speed multiplier",
+    desc: "Animation speed multiplier (0-16)",
   },
   {
     name: "transitionDuration",
@@ -74,6 +77,18 @@ const OPTIONS = [
     type: "number",
     default: "1.0",
     desc: "Overall zoom level of the effect (0.01-4)",
+  },
+  {
+    name: "highPrecisionInput",
+    type: "boolean",
+    default: "false",
+    desc: "Float32 history for smoothed video (creation only)",
+  },
+  {
+    name: "highPrecisionOutput",
+    type: "boolean",
+    default: "false",
+    desc: "Float16 drawing buffer (creation only)",
   },
 ];
 
@@ -118,6 +133,16 @@ function App() {
 
 const REACT_PROPS = [
   { name: "src", type: "string", desc: "Image URL (auto-loads on change)" },
+  {
+    name: "video",
+    type: "HTMLVideoElement",
+    desc: "Playing video to follow, takes precedence over src",
+  },
+  {
+    name: "videoOptions",
+    type: "KawarpVideoOptions",
+    desc: "Sample size, frame rate, and smoothing",
+  },
   {
     name: "autoPlay",
     type: "boolean",

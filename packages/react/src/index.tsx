@@ -1,4 +1,9 @@
-import { Kawarp as KawarpCore, type KawarpOptions } from "@kawarp/core";
+import {
+  type KawarpContextOptions,
+  Kawarp as KawarpCore,
+  type KawarpOptions,
+  type KawarpVideoOptions,
+} from "@kawarp/core";
 import {
   type CSSProperties,
   forwardRef,
@@ -10,7 +15,11 @@ import {
   useRef,
 } from "react";
 
-export type { KawarpOptions } from "@kawarp/core";
+export type {
+  KawarpContextOptions,
+  KawarpOptions,
+  KawarpVideoOptions,
+} from "@kawarp/core";
 
 export interface KawarpRef {
   /** The underlying Kawarp instance */
@@ -27,13 +36,17 @@ export interface KawarpRef {
   stop: () => void;
 }
 
-export interface KawarpProps extends KawarpOptions {
+export interface KawarpProps extends KawarpOptions, KawarpContextOptions {
   /** Additional class name for the canvas */
   className?: string;
   /** Additional styles for the canvas */
   style?: CSSProperties;
   /** Image URL to load (auto-loads when changed) */
   src?: string;
+  /** Playing video to use as the source; takes precedence over src */
+  video?: HTMLVideoElement | null;
+  /** Sampling options for the video source */
+  videoOptions?: Omit<KawarpVideoOptions, "onError">;
   /** Whether to auto-start animation (default: true) */
   autoPlay?: boolean;
   /** Callback when the image is loaded */
@@ -102,6 +115,8 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
     className,
     style,
     src,
+    video,
+    videoOptions,
     autoPlay = true,
     onLoad,
     onError,
@@ -114,6 +129,8 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
     tintIntensity,
     dithering,
     scale,
+    highPrecisionInput,
+    highPrecisionOutput,
   },
   ref,
 ) {
@@ -122,6 +139,11 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
   const containerRef = useRef<HTMLDivElement>(null);
   const initializedRef = useRef(false);
   const currentSrcRef = useRef<string | undefined>(undefined);
+  const lastVideoRef = useRef<HTMLVideoElement | null | undefined>(undefined);
+  const posterVideoRef = useRef<HTMLVideoElement | null | undefined>(undefined);
+  const onLoadRef = useRef(onLoad);
+  const onErrorRef = useRef(onError);
+  const videoFailedRef = useRef(false);
 
   // Expose imperative methods
   useImperativeHandle(
@@ -166,13 +188,16 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
       tintIntensity,
       dithering,
       scale,
+      highPrecisionInput,
+      highPrecisionOutput,
     });
     kawarpRef.current = kawarp;
     initializedRef.current = true;
 
-    // Load initial image if provided
+    // Load initial image if provided; with a video it shows until the first frame
     if (src) {
       currentSrcRef.current = src;
+      posterVideoRef.current = video;
       kawarp
         .loadImage(src)
         .then(() => {
@@ -198,21 +223,84 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-load when src prop changes
+  // Auto-load when src changes; src takes over again once the video is cleared
   useEffect(() => {
-    if (!initializedRef.current || !kawarpRef.current) return;
-    if (src === currentSrcRef.current) return;
-
+    const kawarp = kawarpRef.current;
+    if (!initializedRef.current || !kawarp) return;
+    const previousVideo = lastVideoRef.current;
+    lastVideoRef.current = video;
+    const leavingVideo = !video && !!previousVideo;
+    const srcChanged = src !== currentSrcRef.current;
     currentSrcRef.current = src;
-    if (src) {
-      kawarpRef.current
+    if (leavingVideo) kawarp.unloadVideo();
+
+    // While a video is set, src only matters as the poster of a new video or
+    // the fallback of a failed one; loading it otherwise would replace the video
+    // Runs before the new video resets videoFailedRef, so a cleared video that
+    // already fell back to src does not load it again
+    const shouldLoad = video
+      ? srcChanged && (video !== previousVideo || videoFailedRef.current)
+      : srcChanged || (leavingVideo && !videoFailedRef.current);
+    if (src && shouldLoad) {
+      posterVideoRef.current = video;
+      kawarp
         .loadImage(src)
         .then(() => onLoad?.())
         .catch((error) => {
           onError?.(error instanceof Error ? error : new Error(String(error)));
         });
     }
-  }, [src, onLoad, onError]);
+  }, [src, video, onLoad, onError]);
+
+  useEffect(() => {
+    onLoadRef.current = onLoad;
+    onErrorRef.current = onError;
+  });
+
+  // A new video gets a fresh attempt and resumes animation like autoPlay does for src
+  useEffect(() => {
+    videoFailedRef.current = false;
+    if (video && autoPlay) kawarpRef.current?.start();
+  }, [video]);
+
+  useEffect(() => {
+    const kawarp = kawarpRef.current;
+    if (!kawarp || !video || videoFailedRef.current) return;
+    let loadingVideo = true;
+    const reportVideoError = (error: unknown) => {
+      videoFailedRef.current = true;
+      onErrorRef.current?.(
+        error instanceof Error ? error : new Error(String(error)),
+      );
+      const fallbackSrc = currentSrcRef.current;
+      if (!fallbackSrc || kawarpRef.current !== kawarp) return;
+      // A failure on the first frame leaves the poster requested in this commit on screen
+      if (loadingVideo && posterVideoRef.current === video) return;
+      kawarp
+        .loadImage(fallbackSrc)
+        .then(() => onLoadRef.current?.())
+        .catch((loadError) => {
+          onErrorRef.current?.(
+            loadError instanceof Error
+              ? loadError
+              : new Error(String(loadError)),
+          );
+        });
+    };
+    try {
+      kawarp.loadVideo(video, { ...videoOptions, onError: reportVideoError });
+    } catch (error) {
+      reportVideoError(error);
+    }
+    loadingVideo = false;
+  }, [
+    video,
+    videoOptions?.sampleWidth,
+    videoOptions?.sampleHeight,
+    videoOptions?.downsampleFactor,
+    videoOptions?.frameRate,
+    videoOptions?.smoothing,
+  ]);
 
   // Memoize tintColor to prevent unnecessary updates
   const stableTintColor = useMemo(

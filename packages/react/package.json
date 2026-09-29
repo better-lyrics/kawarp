@@ -40,7 +40,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch --preserveWatchOutput",
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit && tsc --noEmit -p test",
+    "test": "vitest run"
   },
   "dependencies": {
     "@kawarp/core": "workspace:*"
@@ -50,6 +51,12 @@
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
-    "typescript": "^5.0.0"
+    "@types/react-dom": "^19",
+    "@vitest/browser-playwright": "5.0.2",
+    "playwright": "1.63.0",
+    "react": "^19",
+    "react-dom": "^19",
+    "typescript": "^5.0.0",
+    "vitest": "5.0.2"
   }
 }
