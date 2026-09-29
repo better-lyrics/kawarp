@@ -135,6 +135,21 @@ describe("video playback control", () => {
     );
   });
 
+  it("regression: limits the frame rate when the page clock is still small", async () => {
+    const source = await createVideo(paintSolid(CORAL));
+    const { instance, canvas } = createKawarp({});
+    // Pick an interval just over half the page clock: a start slot of 0 used
+    // to schedule the next sample in the past, letting the next frame through
+    const frameRate = 1000 / (performance.now() / 1.9);
+    instance.loadVideo(source.video, { frameRate });
+    instance.start();
+    source.setPainter(paintSolid(TEAL));
+    await settleVideo(source.video);
+    expect(colorDistance(centerPixel(canvas), CORAL)).toBeLessThan(
+      DECODE_TOLERANCE,
+    );
+  });
+
   it("limits sampling to the configured frame rate", async () => {
     const source = await createVideo(paintSolid(CORAL));
     const { instance, canvas } = createKawarp({});

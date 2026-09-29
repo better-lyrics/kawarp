@@ -406,7 +406,7 @@ export class Kawarp {
   // Smallest change the history format can store; 0 for float32
   private videoHistoryStep = 0;
   // Ideal time of the last sample on the frameRate cadence
-  private videoSampleSlot = 0;
+  private videoSampleSlot = Number.NEGATIVE_INFINITY;
   private videoTargetsStale = true;
   private videoSourceWidth = 0;
   private videoSourceHeight = 0;
@@ -880,7 +880,7 @@ export class Kawarp {
       this.video = video;
       this.videoFrameShown = false;
       this.hasVideoHistory = false;
-      this.videoSampleSlot = 0;
+      this.videoSampleSlot = Number.NEGATIVE_INFINITY;
     }
 
     const nextOptions = {
