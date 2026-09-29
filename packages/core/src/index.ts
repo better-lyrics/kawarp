@@ -390,8 +390,8 @@ export class Kawarp {
 
   // Video source state
   private video: HTMLVideoElement | null = null;
-  // Let in-flight image loads detect a later loadVideo call, or a video frame
-  // that has since taken the screen
+  // An in-flight image load is dropped only when a later loadVideo call has
+  // since put a video frame on screen
   private videoLoadCount = 0;
   private videoFirstFrameCount = 0;
   private videoOptions: Required<Omit<KawarpVideoOptions, "onError">> &
@@ -736,7 +736,11 @@ export class Kawarp {
       });
     }
 
-    if (this.disposed || this.videoFirstFrameCount !== videoFramesAtStart) {
+    if (
+      this.disposed ||
+      (this.videoLoadCount !== videoLoadsAtStart &&
+        this.videoFirstFrameCount !== videoFramesAtStart)
+    ) {
       if ("close" in bitmap) bitmap.close();
       return;
     }
@@ -809,7 +813,11 @@ export class Kawarp {
     const videoLoadsAtStart = this.videoLoadCount;
     const videoFramesAtStart = this.videoFirstFrameCount;
     const bitmap = await createImageBitmap(blob);
-    if (this.disposed || this.videoFirstFrameCount !== videoFramesAtStart) {
+    if (
+      this.disposed ||
+      (this.videoLoadCount !== videoLoadsAtStart &&
+        this.videoFirstFrameCount !== videoFramesAtStart)
+    ) {
       bitmap.close();
       return;
     }
@@ -1194,6 +1202,8 @@ export class Kawarp {
       this.videoFrameShown = true;
       this.videoFirstFrameCount++;
       this.processNewImage(texture);
+      // A stopped instance cannot animate the crossfade, so show the frame outright
+      if (!this.isPlaying) this.isTransitioning = false;
     }
     if (!this.isPlaying) this.render(this.accumulatedTime);
   }

@@ -272,6 +272,50 @@ describe("unloading and replacing video", () => {
     expect(colorDistance(centerPixel(canvas), BLUE)).toBeLessThan(3);
   });
 
+  it("shows an image loaded after loadVideo even if the first frame lands mid-load", async () => {
+    const source = await createVideo(paintSolid(CORAL));
+    const { instance, canvas } = createKawarp({});
+    instance.start();
+    const lateVideo = document.createElement("video");
+    lateVideo.muted = true;
+    instance.loadVideo(lateVideo);
+
+    const imageUrl = createSolidCanvas(BLUE).toDataURL();
+    const realFetch = window.fetch;
+    // Slow network, so the video's first frame arrives while the image downloads
+    window.fetch = (input, init) =>
+      new Promise((resolve) => setTimeout(resolve, 600)).then(() =>
+        realFetch(input, init),
+      );
+    try {
+      const pendingImage = instance.loadImage(imageUrl);
+      lateVideo.srcObject = source.video.srcObject;
+      await lateVideo.play();
+      await settleVideo(lateVideo);
+      expect(colorDistance(centerPixel(canvas), CORAL)).toBeLessThan(
+        DECODE_TOLERANCE,
+      );
+      await pendingImage;
+    } finally {
+      window.fetch = realFetch;
+      lateVideo.pause();
+    }
+    await nextAnimationFrame();
+    expect(colorDistance(centerPixel(canvas), BLUE)).toBeLessThan(3);
+  });
+
+  it("shows a paused video's first frame on a stopped instance without waiting for a crossfade", async () => {
+    const source = await createVideo(paintSolid(CORAL));
+    source.video.pause();
+    const { instance, canvas } = createKawarp({});
+    instance.loadImageElement(createSolidCanvas(BLUE));
+    instance.transitionDuration = 5000;
+    instance.loadVideo(source.video);
+    expect(colorDistance(centerPixel(canvas), CORAL)).toBeLessThan(
+      DECODE_TOLERANCE,
+    );
+  });
+
   it("keeps an in-flight image when the video is unloaded before its first frame", async () => {
     const { instance, canvas } = createKawarp({});
     const blob = await new Promise<Blob>((resolve, reject) =>
@@ -292,7 +336,9 @@ describe("unloading and replacing video", () => {
     const { instance, canvas } = createKawarp({});
     instance.loadImageElement(createSolidCanvas(BLUE));
     instance.transitionDuration = 60000;
+    instance.start();
     instance.loadVideo(video);
+    await nextAnimationFrame();
     const color = centerPixel(canvas);
     expect(colorDistance(color, BLUE)).toBeLessThan(
       colorDistance(color, CORAL),

@@ -139,7 +139,8 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
   const containerRef = useRef<HTMLDivElement>(null);
   const initializedRef = useRef(false);
   const currentSrcRef = useRef<string | undefined>(undefined);
-  const followedVideoRef = useRef(false);
+  const lastVideoRef = useRef<HTMLVideoElement | null | undefined>(undefined);
+  const onLoadRef = useRef(onLoad);
   const onErrorRef = useRef(onError);
   const videoFailedRef = useRef(false);
 
@@ -230,17 +231,19 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
   useEffect(() => {
     const kawarp = kawarpRef.current;
     if (!initializedRef.current || !kawarp) return;
-    const leavingVideo = !video && followedVideoRef.current;
-    followedVideoRef.current = !!video;
-    if (video && !videoFailedRef.current) {
-      currentSrcRef.current = src;
-      return;
-    }
-    if (src === currentSrcRef.current && !leavingVideo) return;
-
+    const previousVideo = lastVideoRef.current;
+    lastVideoRef.current = video;
+    const leavingVideo = !video && !!previousVideo;
+    const srcChanged = src !== currentSrcRef.current;
     currentSrcRef.current = src;
     if (leavingVideo) kawarp.unloadVideo();
-    if (src) {
+
+    // While a video is set, src only matters as the poster of a new video or
+    // the fallback of a failed one; loading it otherwise would replace the video
+    const shouldLoad = video
+      ? srcChanged && (video !== previousVideo || videoFailedRef.current)
+      : srcChanged || leavingVideo;
+    if (src && shouldLoad) {
       kawarp
         .loadImage(src)
         .then(() => onLoad?.())
@@ -251,6 +254,7 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
   }, [src, video, onLoad, onError]);
 
   useEffect(() => {
+    onLoadRef.current = onLoad;
     onErrorRef.current = onError;
   });
 
@@ -262,6 +266,18 @@ export const Kawarp = forwardRef<KawarpRef, KawarpProps>(function Kawarp(
       onErrorRef.current?.(
         error instanceof Error ? error : new Error(String(error)),
       );
+      const fallbackSrc = currentSrcRef.current;
+      if (!fallbackSrc || kawarpRef.current !== kawarp) return;
+      kawarp
+        .loadImage(fallbackSrc)
+        .then(() => onLoadRef.current?.())
+        .catch((loadError) => {
+          onErrorRef.current?.(
+            loadError instanceof Error
+              ? loadError
+              : new Error(String(loadError)),
+          );
+        });
     };
     try {
       kawarp.loadVideo(video, { ...videoOptions, onError: reportVideoError });
