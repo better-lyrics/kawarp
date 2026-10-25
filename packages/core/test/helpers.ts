@@ -1,3 +1,35 @@
+import { inject } from "vitest";
+import { page } from "vitest/browser";
+import {
+  Kawarp,
+  type KawarpContextOptions,
+  type KawarpOptions,
+} from "../src/index";
+
+export type Backend = "webgl2" | "webgpu";
+
+/** Backend for this test project, set in vitest.config.ts */
+export const BACKEND: Backend = inject("backend");
+
+const created: Kawarp[] = [];
+
+export const createInstance = async (
+  canvas: HTMLCanvasElement,
+  options: KawarpOptions & KawarpContextOptions = {},
+): Promise<Kawarp> => {
+  const instance = await Kawarp.create(canvas, {
+    ...options,
+    backend: BACKEND,
+  });
+  created.push(instance);
+  return instance;
+};
+
+/** Dispose every instance createInstance made; WebGPU devices are limited */
+export const disposeInstances = (): void => {
+  for (const instance of created.splice(0)) instance.dispose();
+};
+
 export type Rgb = [number, number, number];
 
 export const createCanvas = (width = 64, height = 64): HTMLCanvasElement => {
@@ -29,6 +61,31 @@ export const pixelAt = (image: ImageData, x: number, y: number): Rgb => {
 
 export const centerPixel = (canvas: HTMLCanvasElement): Rgb =>
   pixelAt(readCanvasPixels(canvas), canvas.width / 2, canvas.height / 2);
+
+/**
+ * The center pixel as shown on screen. A WebGPU canvas reads back only in the
+ * task that drew it, later reads are blank, so read a screenshot instead.
+ */
+export const displayedCenterPixel = async (
+  canvas: HTMLCanvasElement,
+): Promise<Rgb> => {
+  if (BACKEND !== "webgpu") return centerPixel(canvas);
+  const base64 = await page.screenshot({ element: canvas, save: false });
+  const response = await fetch(`data:image/png;base64,${base64}`);
+  const bitmap = await createImageBitmap(await response.blob());
+  const readback = document.createElement("canvas");
+  readback.width = bitmap.width;
+  readback.height = bitmap.height;
+  const context = readback.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("2D canvas unavailable");
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  return pixelAt(
+    context.getImageData(0, 0, readback.width, readback.height),
+    readback.width / 2,
+    readback.height / 2,
+  );
+};
 
 export const colorDistance = (a: Rgb, b: Rgb): number =>
   Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]));

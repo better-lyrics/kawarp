@@ -2,13 +2,16 @@ import { Kawarp as BaselineKawarp } from "@kawarp/core-baseline";
 import { afterEach, describe, expect, it } from "vitest";
 import { Kawarp, type KawarpOptions } from "../src/index";
 import {
+  BACKEND,
   colorDistance,
   countDifferentBytes,
   createArtworkCanvas,
   createCanvas,
+  createInstance,
   createSolidCanvas,
   createSplitCanvas,
   decodeHalfFloat,
+  disposeInstances,
   pixelAt,
   type Rgb,
   readCanvasPixels,
@@ -30,13 +33,16 @@ const OPTION_SETS: KawarpOptions[] = [
   },
 ];
 
-const renderImage = (
+const renderImage = async (
   Renderer: typeof Kawarp | typeof BaselineKawarp,
   options: ConstructorParameters<typeof Kawarp>[1],
   configure?: (instance: Kawarp | BaselineKawarp) => void,
-): ImageData => {
+): Promise<ImageData> => {
   const canvas = createCanvas(96, 64);
-  const instance = new Renderer(canvas, options);
+  const instance =
+    Renderer === Kawarp
+      ? await createInstance(canvas, options)
+      : new Renderer(canvas, options);
   instance.loadImageElement(createArtworkCanvas());
   configure?.(instance);
   instance.renderFrame(RENDER_TIME);
@@ -46,40 +52,49 @@ const renderImage = (
 };
 
 afterEach(() => {
+  disposeInstances();
   document.body.replaceChildren();
 });
 
 describe("default image path matches the @kawarp/core 1.2.2 WebGL1 path within one step", () => {
-  it.each(OPTION_SETS)("renders identical pixels for %o", (options) => {
-    const current = renderImage(Kawarp, options);
-    const baseline = renderImage(BaselineKawarp, options);
+  it.each(OPTION_SETS)("renders identical pixels for %o", async (options) => {
+    const current = await renderImage(Kawarp, options);
+    const baseline = await renderImage(BaselineKawarp, options);
     expect(countDifferentBytes(current.data, baseline.data, 1)).toBe(0);
   });
 
-  it("re-blurs identically when blur, tint, and saturation change after load", () => {
+  it("re-blurs identically when blur, tint, and saturation change after load", async () => {
     const configure = (instance: Kawarp | BaselineKawarp) => {
       instance.blurPasses = 12;
       instance.tintIntensity = 0.5;
       instance.tintColor = [0.2, 0.5, 0.1];
       instance.saturation = 0.8;
     };
-    const current = renderImage(Kawarp, { dithering: 0 }, configure);
-    const baseline = renderImage(BaselineKawarp, { dithering: 0 }, configure);
+    const current = await renderImage(Kawarp, { dithering: 0 }, configure);
+    const baseline = await renderImage(
+      BaselineKawarp,
+      { dithering: 0 },
+      configure,
+    );
     expect(countDifferentBytes(current.data, baseline.data, 1)).toBe(0);
   });
 
-  it("renders identically when a second image replaces the first", () => {
+  it("renders identically when a second image replaces the first", async () => {
     const configure = (instance: Kawarp | BaselineKawarp) => {
       instance.transitionDuration = 0;
       instance.loadImageElement(createSolidCanvas([30, 160, 220]));
     };
-    const current = renderImage(Kawarp, { dithering: 0 }, configure);
-    const baseline = renderImage(BaselineKawarp, { dithering: 0 }, configure);
+    const current = await renderImage(Kawarp, { dithering: 0 }, configure);
+    const baseline = await renderImage(
+      BaselineKawarp,
+      { dithering: 0 },
+      configure,
+    );
     expect(countDifferentBytes(current.data, baseline.data, 1)).toBe(0);
   });
 
-  it("keeps the getOptions shape", () => {
-    const current = new Kawarp(createCanvas());
+  it("keeps the getOptions shape", async () => {
+    const current = await createInstance(createCanvas());
     const baseline = new BaselineKawarp(createCanvas());
     expect(Object.keys(current.getOptions()).sort()).toEqual(
       Object.keys(baseline.getOptions()).sort(),
@@ -87,89 +102,100 @@ describe("default image path matches the @kawarp/core 1.2.2 WebGL1 path within o
     expect(current.getOptions()).toEqual(baseline.getOptions());
   });
 
-  it("uses a WebGL2 context and reports no high-precision paths by default", () => {
+  it("uses the requested backend and reports no high-precision paths by default", async () => {
     const canvas = createCanvas();
-    const instance = new Kawarp(canvas);
-    expect(canvas.getContext("webgl2")).not.toBeNull();
+    const instance = await createInstance(canvas);
+    expect(instance.backend).toBe(BACKEND);
     expect(instance.highPrecisionInput).toBe(false);
     expect(instance.highPrecisionOutput).toBe(false);
   });
 });
 
 describe("high-precision contexts", () => {
-  it("renders the image path on WebGL2 within one step of the default path", () => {
-    const current = renderImage(Kawarp, {
+  it("renders the image path on WebGL2 within one step of the default path", async () => {
+    const current = await renderImage(Kawarp, {
       highPrecisionInput: true,
       dithering: 0,
     });
-    const baseline = renderImage(BaselineKawarp, { dithering: 0 });
+    const baseline = await renderImage(BaselineKawarp, { dithering: 0 });
     expect(countDifferentBytes(current.data, baseline.data, 1)).toBe(0);
   });
 
-  it("reports float render targets when highPrecisionInput is requested", () => {
+  it("reports float render targets when highPrecisionInput is requested", async () => {
     const canvas = createCanvas();
-    const instance = new Kawarp(canvas, { highPrecisionInput: true });
-    expect(canvas.getContext("webgl2")).not.toBeNull();
+    const instance = await createInstance(canvas, { highPrecisionInput: true });
+    expect(instance.backend).toBe(BACKEND);
     expect(instance.highPrecisionInput).toBe(true);
     expect(instance.highPrecisionOutput).toBe(false);
   });
 
-  it("does not report float32 input when only highPrecisionOutput is requested", () => {
-    const instance = new Kawarp(createCanvas(), { highPrecisionOutput: true });
+  it("does not report float32 input when only highPrecisionOutput is requested", async () => {
+    const instance = await createInstance(createCanvas(), {
+      highPrecisionOutput: true,
+    });
     expect(instance.highPrecisionInput).toBe(false);
   });
 
-  it("allocates a float16 drawing buffer when highPrecisionOutput is requested", () => {
-    const canvas = createCanvas();
-    const instance = new Kawarp(canvas, { highPrecisionOutput: true });
-    const gl = canvas.getContext("webgl2") as WebGL2RenderingContext & {
-      drawingBufferFormat?: number;
-    };
-    expect(instance.highPrecisionOutput).toBe(true);
-    expect(gl.drawingBufferFormat).toBe(gl.RGBA16F);
-  });
+  // WebGL2-only: reads the drawing buffer through the WebGL context
+  it.skipIf(BACKEND !== "webgl2")(
+    "allocates a float16 drawing buffer when highPrecisionOutput is requested",
+    async () => {
+      const canvas = createCanvas();
+      const instance = await createInstance(canvas, {
+        highPrecisionOutput: true,
+      });
+      const gl = canvas.getContext("webgl2") as WebGL2RenderingContext & {
+        drawingBufferFormat?: number;
+      };
+      expect(instance.highPrecisionOutput).toBe(true);
+      expect(gl.drawingBufferFormat).toBe(gl.RGBA16F);
+    },
+  );
 
-  it("keeps rendering after a float16 drawing buffer is resized", () => {
-    const canvas = createCanvas(32, 32);
-    const instance = new Kawarp(canvas, {
-      highPrecisionOutput: true,
-      saturation: 1,
-      tintIntensity: 0,
-      dithering: 0,
-      warpIntensity: 0,
-    });
-    instance.loadImageElement(createSolidCanvas([220, 120, 40]));
-    canvas.width = 80;
-    canvas.height = 48;
-    instance.resize();
-    instance.renderFrame(RENDER_TIME);
-    const gl = canvas.getContext("webgl2") as WebGL2RenderingContext & {
-      drawingBufferFormat?: number;
-    };
-    expect(gl.drawingBufferFormat).toBe(gl.RGBA16F);
-    // SwiftShader cannot copy a float16 WebGL canvas into a 2D canvas, so read it directly
-    const halfFloats = new Uint16Array(4);
-    gl.readPixels(40, 24, 1, 1, gl.RGBA, gl.HALF_FLOAT, halfFloats);
-    const color = Array.from(halfFloats.subarray(0, 3), (value) =>
-      Math.round(decodeHalfFloat(value) * 255),
-    ) as Rgb;
-    expect(colorDistance(color, [220, 120, 40])).toBeLessThan(4);
-  });
+  it.skipIf(BACKEND !== "webgl2")(
+    "keeps rendering after a float16 drawing buffer is resized",
+    async () => {
+      const canvas = createCanvas(32, 32);
+      const instance = await createInstance(canvas, {
+        highPrecisionOutput: true,
+        saturation: 1,
+        tintIntensity: 0,
+        dithering: 0,
+        warpIntensity: 0,
+      });
+      instance.loadImageElement(createSolidCanvas([220, 120, 40]));
+      canvas.width = 80;
+      canvas.height = 48;
+      instance.resize();
+      instance.renderFrame(RENDER_TIME);
+      const gl = canvas.getContext("webgl2") as WebGL2RenderingContext & {
+        drawingBufferFormat?: number;
+      };
+      expect(gl.drawingBufferFormat).toBe(gl.RGBA16F);
+      // SwiftShader cannot copy a float16 WebGL canvas into a 2D canvas, so read it directly
+      const halfFloats = new Uint16Array(4);
+      gl.readPixels(40, 24, 1, 1, gl.RGBA, gl.HALF_FLOAT, halfFloats);
+      const color = Array.from(halfFloats.subarray(0, 3), (value) =>
+        Math.round(decodeHalfFloat(value) * 255),
+      ) as Rgb;
+      expect(colorDistance(color, [220, 120, 40])).toBeLessThan(4);
+    },
+  );
 });
 
 describe("option ranges", () => {
-  it("accepts zero blur passes and bypasses the blur", () => {
-    const instance = new Kawarp(createCanvas());
+  it("accepts zero blur passes and bypasses the blur", async () => {
+    const instance = await createInstance(createCanvas());
     instance.blurPasses = 0;
     expect(instance.blurPasses).toBe(0);
     instance.blurPasses = -3;
     expect(instance.blurPasses).toBe(0);
   });
 
-  it("keeps hard edges sharper with zero blur passes than with the default", () => {
-    const edgeRedness = (blurPasses: number) => {
+  it("keeps hard edges sharper with zero blur passes than with the default", async () => {
+    const edgeRedness = async (blurPasses: number) => {
       const canvas = createCanvas(64, 64);
-      const instance = new Kawarp(canvas, {
+      const instance = await createInstance(canvas, {
         blurPasses,
         saturation: 1,
         tintIntensity: 0,
@@ -184,11 +210,11 @@ describe("option ranges", () => {
       instance.dispose();
       return Math.abs(red - blue);
     };
-    expect(edgeRedness(0)).toBeGreaterThan(edgeRedness(8) + 40);
+    expect(await edgeRedness(0)).toBeGreaterThan((await edgeRedness(8)) + 40);
   });
 
-  it("accepts animation speeds from 0 to 16", () => {
-    const instance = new Kawarp(createCanvas());
+  it("accepts animation speeds from 0 to 16", async () => {
+    const instance = await createInstance(createCanvas());
     instance.animationSpeed = 0;
     expect(instance.animationSpeed).toBe(0);
     instance.animationSpeed = 16;
@@ -197,8 +223,8 @@ describe("option ranges", () => {
     expect(instance.animationSpeed).toBe(16);
   });
 
-  it("keeps in-range values unchanged", () => {
-    const current = new Kawarp(createCanvas());
+  it("keeps in-range values unchanged", async () => {
+    const current = await createInstance(createCanvas());
     const baseline = new BaselineKawarp(createCanvas());
     for (const value of [1, 7, 40]) {
       current.blurPasses = value;

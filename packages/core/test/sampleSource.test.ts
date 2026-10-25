@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { Kawarp, type KawarpContextOptions } from "../src/index";
+import type { Kawarp, KawarpContextOptions } from "../src/index";
 import {
   colorDistance,
   createCanvas,
   createCheckerboardCanvas,
+  createInstance,
   createSolidCanvas,
   createVideoSource,
+  disposeInstances,
   paintSolid,
   type Rgb,
   type TestVideoSource,
@@ -22,8 +24,8 @@ const CONTEXTS: [string, KawarpContextOptions][] = [
 const instances: Kawarp[] = [];
 const sources: TestVideoSource[] = [];
 
-const createKawarp = (options: KawarpContextOptions) => {
-  const instance = new Kawarp(createCanvas(), options);
+const createKawarp = async (options: KawarpContextOptions) => {
+  const instance = await createInstance(createCanvas(), options);
   instances.push(instance);
   return instance;
 };
@@ -38,18 +40,19 @@ const everyPixelNear = (pixels: Uint8Array, color: Rgb, tolerance: number) => {
 
 afterEach(() => {
   for (const instance of instances.splice(0)) instance.dispose();
+  disposeInstances();
   for (const source of sources.splice(0)) source.dispose();
   document.body.replaceChildren();
 });
 
 describe.each(CONTEXTS)("sampleSource on %s", (_name, contextOptions) => {
   it("resolves null before any source is loaded", async () => {
-    const instance = createKawarp(contextOptions);
+    const instance = await createKawarp(contextOptions);
     await expect(instance.sampleSource()).resolves.toBeNull();
   });
 
   it("returns a size x size RGBA thumbnail of the image", async () => {
-    const instance = createKawarp(contextOptions);
+    const instance = await createKawarp(contextOptions);
     instance.loadImageElement(createSolidCanvas(AMBER, 200));
     const pixels = await instance.sampleSource(8);
     expect(pixels).toHaveLength(8 * 8 * 4);
@@ -59,7 +62,7 @@ describe.each(CONTEXTS)("sampleSource on %s", (_name, contextOptions) => {
   it("samples the current video frame", async () => {
     const source = await createVideoSource(320, 180, paintSolid(VIOLET));
     sources.push(source);
-    const instance = createKawarp(contextOptions);
+    const instance = await createKawarp(contextOptions);
     instance.loadVideo(source.video);
     const pixels = await instance.sampleSource(16);
     expect(pixels).toHaveLength(16 * 16 * 4);
@@ -67,7 +70,7 @@ describe.each(CONTEXTS)("sampleSource on %s", (_name, contextOptions) => {
   });
 
   it("averages fine detail instead of aliasing", async () => {
-    const instance = createKawarp(contextOptions);
+    const instance = await createKawarp(contextOptions);
     instance.loadImageElement(createCheckerboardCanvas(256));
     const pixels = await instance.sampleSource(8);
     expect(everyPixelNear(pixels as Uint8Array, [128, 128, 128], 24)).toBe(
@@ -76,7 +79,7 @@ describe.each(CONTEXTS)("sampleSource on %s", (_name, contextOptions) => {
   });
 
   it("returns the requested size when calls with different sizes overlap", async () => {
-    const instance = createKawarp(contextOptions);
+    const instance = await createKawarp(contextOptions);
     instance.loadImageElement(createSolidCanvas(AMBER));
     const [small, large] = await Promise.all([
       instance.sampleSource(8),
@@ -87,7 +90,7 @@ describe.each(CONTEXTS)("sampleSource on %s", (_name, contextOptions) => {
   });
 
   it("clamps the size to the blur resolution", async () => {
-    const instance = createKawarp(contextOptions);
+    const instance = await createKawarp(contextOptions);
     instance.loadImageElement(createSolidCanvas(AMBER));
     await expect(instance.sampleSource(4096)).resolves.toHaveLength(
       128 * 128 * 4,
@@ -97,7 +100,7 @@ describe.each(CONTEXTS)("sampleSource on %s", (_name, contextOptions) => {
 
   it("does not disturb rendering", async () => {
     const canvas = createCanvas();
-    const instance = new Kawarp(canvas, {
+    const instance = await createInstance(canvas, {
       ...contextOptions,
       saturation: 1,
       tintIntensity: 0,
@@ -122,7 +125,7 @@ describe.each(CONTEXTS)("sampleSource on %s", (_name, contextOptions) => {
 
 describe("sampleSource concurrency and lifetime", () => {
   it("shares one pending read between concurrent calls", async () => {
-    const instance = createKawarp({ highPrecisionInput: true });
+    const instance = await createKawarp({ highPrecisionInput: true });
     instance.loadImageElement(createSolidCanvas(AMBER));
     const first = instance.sampleSource(8);
     const second = instance.sampleSource(8);
@@ -131,7 +134,9 @@ describe("sampleSource concurrency and lifetime", () => {
   });
 
   it("resolves null when disposed while a read is pending", async () => {
-    const instance = new Kawarp(createCanvas(), { highPrecisionInput: true });
+    const instance = await createInstance(createCanvas(), {
+      highPrecisionInput: true,
+    });
     instance.loadImageElement(createSolidCanvas(AMBER));
     const pending = instance.sampleSource(8);
     instance.dispose();

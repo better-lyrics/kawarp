@@ -13,8 +13,11 @@
  */
 
 import { BLUE_NOISE_SIZE } from "./blueNoise.js";
-import type { Renderer, Target, Texture } from "./renderer.js";
+import type { Renderer, RendererBackend, Target, Texture } from "./renderer.js";
 import { WebGL2Renderer } from "./webgl2.js";
+import { WebGPURenderer } from "./webgpu.js";
+
+export type { RendererBackend as KawarpBackend } from "./renderer.js";
 
 export interface KawarpOptions {
   warpIntensity?: number;
@@ -33,6 +36,14 @@ export interface KawarpContextOptions {
   highPrecisionInput?: boolean;
   /** Request a float16 drawing buffer, falling back to RGBA8. Creation only. */
   highPrecisionOutput?: boolean;
+}
+
+export interface KawarpCreateOptions {
+  /**
+   * Graphics API (default "webgl2"). "webgpu" rejects when WebGPU is
+   * unavailable; "auto" tries WebGPU and falls back to WebGL2.
+   */
+  backend?: "auto" | RendererBackend;
 }
 
 export interface KawarpVideoOptions {
@@ -69,6 +80,9 @@ const R2_Y = 0.5698402909980532;
 const VIDEO_SEEK_THRESHOLD_SECONDS = 0.25;
 // Time constants after the last video frame before easing snaps and goes idle
 const VIDEO_SMOOTHING_SETTLE_RESPONSES = 8;
+
+// Set by Kawarp.create for the synchronous constructor to pick up
+let injectedRenderer: Renderer | null = null;
 
 const boundedOption = (
   value: number | undefined,
@@ -166,7 +180,8 @@ export class Kawarp {
     options: KawarpOptions & KawarpContextOptions = {},
   ) {
     this.canvas = canvas;
-    const renderer = new WebGL2Renderer(canvas);
+    const renderer = injectedRenderer ?? new WebGL2Renderer(canvas);
+    injectedRenderer = null;
     this.renderer = renderer;
     this.highPrecisionInputRequested = !!options.highPrecisionInput;
 
@@ -194,6 +209,30 @@ export class Kawarp {
     this.warpTarget = this.createTarget(initW, initH);
 
     renderer.configureOutput(!!options.highPrecisionOutput);
+  }
+
+  /**
+   * Create an instance on a chosen graphics API. WebGPU is opt-in until it is
+   * measured to cost less than WebGL2. The constructor always uses WebGL2.
+   */
+  static async create(
+    canvas: HTMLCanvasElement,
+    options: KawarpOptions & KawarpContextOptions & KawarpCreateOptions = {},
+  ): Promise<Kawarp> {
+    const backend = options.backend ?? "webgl2";
+    if (backend !== "webgl2") {
+      const renderer = await WebGPURenderer.create(canvas).catch(() => null);
+      if (renderer) {
+        injectedRenderer = renderer;
+        try {
+          return new Kawarp(canvas, options);
+        } finally {
+          injectedRenderer = null;
+        }
+      }
+      if (backend === "webgpu") throw new Error("WebGPU not supported");
+    }
+    return new Kawarp(canvas, options);
   }
 
   /** Graphics API in use */

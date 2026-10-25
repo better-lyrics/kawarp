@@ -121,6 +121,9 @@ importers:
       '@vitest/browser-playwright':
         specifier: 5.0.2
         version: 5.0.2(playwright@1.63.0)(vite@8.3.1(@types/node@22.19.7)(esbuild@0.27.2)(jiti@2.6.1)(less@4.5.1)(sass@1.97.2))(vitest@5.0.2)
+      '@webgpu/types':
+        specifier: ^0.1.74
+        version: 0.1.74
       playwright:
         specifier: 1.63.0
         version: 1.63.0
@@ -1562,6 +1565,9 @@ packages:
 
   '@vitest/utils@5.0.2':
     resolution: {integrity: sha512-mgpUtxFhKeOKVaArBVHNJGdYHAeRh135o59l13uVmPUCS1OUtis5pBqXEgE25iqRgFqEBwXvJlkhknRsYnMeqg==}
+
+  '@webgpu/types@0.1.74':
+    resolution: {integrity: sha512-lgiI4hbuLcI9unnm2cL/tvCaQU45dp0xcLWJh5uB/9MBGvIA4F8XIk7nSiBeg+K4xWGYwgZKn80LmERI5CxoTA==}
 
   acorn-jsx@5.3.2:
     resolution: {integrity: sha512-rq9s+JNhf0IChjtDXxllJ7g41oZk5SlXtp0LHwyA5cejwn7vKmKp4pPri6YEePv2PU65sAsegbXtIinmDFDXgQ==}
@@ -4779,6 +4785,8 @@ snapshots:
       '@vitest/pretty-format': 5.0.2
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.1
+
+  '@webgpu/types@0.1.74': {}
 
   acorn-jsx@5.3.2(acorn@8.15.0):
     dependencies:
