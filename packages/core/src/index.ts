@@ -263,20 +263,24 @@ const OUTPUT_SHADER = `
   }
 `;
 
-// Four bilinear taps average a 4x4 source footprint for reductions up to 4x
+// Four bilinear taps average a 4x4 source footprint for reductions up to 4x.
+// u_flipY turns top-down video uploads upright without UNPACK_FLIP_Y_WEBGL,
+// which can force browsers off their zero-copy video upload path.
 const DOWNSAMPLE_SHADER = `
   precision highp float;
   uniform sampler2D u_texture;
   uniform vec2 u_texelSize;
+  uniform float u_flipY;
   varying vec2 v_texCoord;
 
   void main() {
+    vec2 uv = vec2(v_texCoord.x, mix(v_texCoord.y, 1.0 - v_texCoord.y, u_flipY));
     vec2 offset = u_texelSize * 0.25;
     gl_FragColor = 0.25 * (
-      texture2D(u_texture, v_texCoord + vec2(-offset.x, -offset.y)) +
-      texture2D(u_texture, v_texCoord + vec2(offset.x, -offset.y)) +
-      texture2D(u_texture, v_texCoord + vec2(-offset.x, offset.y)) +
-      texture2D(u_texture, v_texCoord + vec2(offset.x, offset.y))
+      texture2D(u_texture, uv + vec2(-offset.x, -offset.y)) +
+      texture2D(u_texture, uv + vec2(offset.x, -offset.y)) +
+      texture2D(u_texture, uv + vec2(-offset.x, offset.y)) +
+      texture2D(u_texture, uv + vec2(offset.x, offset.y))
     );
   }
 `;
@@ -311,6 +315,7 @@ interface SamplingPrograms {
   downsampleUniforms: {
     texture: WebGLUniformLocation;
     texelSize: WebGLUniformLocation;
+    flipY: WebGLUniformLocation;
   };
   smoothingUniforms: {
     texture: WebGLUniformLocation;
@@ -1113,7 +1118,6 @@ export class Kawarp {
       this.prepareVideoTargets(video.videoWidth, video.videoHeight);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.videoUploadTexture);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
       gl.texImage2D(
         gl.TEXTURE_2D,
         0,
@@ -1127,13 +1131,16 @@ export class Kawarp {
       this.unloadVideo();
       onError?.(error);
       return;
-    } finally {
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     }
 
+    // The upload is top-down; the first stage flips it upright
     let frameTexture = this.videoUploadTexture as WebGLTexture;
     for (const stage of this.videoStages) {
-      this.drawDownsample(frameTexture, stage);
+      this.drawDownsample(
+        frameTexture,
+        stage,
+        frameTexture === this.videoUploadTexture,
+      );
       frameTexture = stage.texture;
     }
 
@@ -1319,6 +1326,7 @@ export class Kawarp {
       downsampleUniforms: {
         texture: gl.getUniformLocation(downsample, "u_texture")!,
         texelSize: gl.getUniformLocation(downsample, "u_texelSize")!,
+        flipY: gl.getUniformLocation(downsample, "u_flipY")!,
       },
       smoothingUniforms: {
         texture: gl.getUniformLocation(smoothing, "u_texture")!,
@@ -1330,7 +1338,11 @@ export class Kawarp {
     return this.samplingPrograms;
   }
 
-  private drawDownsample(source: WebGLTexture, target: Framebuffer): void {
+  private drawDownsample(
+    source: WebGLTexture,
+    target: Framebuffer,
+    flipY = false,
+  ): void {
     const gl = this.gl;
     const programs = this.getSamplingPrograms();
     gl.useProgram(programs.downsample);
@@ -1345,6 +1357,7 @@ export class Kawarp {
       1 / target.width,
       1 / target.height,
     );
+    gl.uniform1f(programs.downsampleUniforms.flipY, flipY ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
