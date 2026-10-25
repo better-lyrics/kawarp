@@ -2,7 +2,7 @@
  * Kawarp - Fluid Animated Background Renderer
  *
  * Creates a fluid, animated background effect similar to Apple Music's album art visualization.
- * Uses WebGL with Kawase blur and domain warping techniques.
+ * Uses WebGL2 with Kawase blur and domain warping techniques.
  *
  * Optimized architecture:
  * - Blur runs on small textures (128x128) only when image changes
@@ -25,9 +25,9 @@ export interface KawarpOptions {
 }
 
 export interface KawarpContextOptions {
-  /** Use WebGL2 with float32 color history for smoothed video. Creation only. */
+  /** Keep float32 color history for smoothed video. Creation only. */
   highPrecisionInput?: boolean;
-  /** Request a float16 WebGL2 drawing buffer, falling back to RGBA8. Creation only. */
+  /** Request a float16 drawing buffer, falling back to RGBA8. Creation only. */
   highPrecisionOutput?: boolean;
 }
 
@@ -322,9 +322,7 @@ interface SamplingPrograms {
 
 export class Kawarp {
   private canvas: HTMLCanvasElement;
-  private gl: WebGLRenderingContext;
-  private halfFloatExt: OES_texture_half_float | null = null;
-  private halfFloatLinearExt: OES_texture_half_float_linear | null = null;
+  private gl: WebGL2RenderingContext;
 
   // Shader programs
   private blurProgram: WebGLProgram;
@@ -375,8 +373,7 @@ export class Kawarp {
   private _scale: number;
   private hasImage = false;
 
-  // WebGL2 high-precision state (null/false on the default WebGL1 path)
-  private gl2: WebGL2RenderingContext | null;
+  // Float render target support
   private halfFloatRenderTargets = false;
   private float32RenderTargets = false;
   private floatLinearFiltering = false;
@@ -480,27 +477,16 @@ export class Kawarp {
       preserveDrawingBuffer: true,
       powerPreference: "high-performance",
     };
-    const gl2 =
-      options.highPrecisionInput || options.highPrecisionOutput
-        ? canvas.getContext("webgl2", contextAttributes)
-        : null;
-    const gl = gl2 ?? canvas.getContext("webgl", contextAttributes);
-    if (!gl) throw new Error("WebGL not supported");
-    this.gl = gl as WebGLRenderingContext;
-    this.gl2 = gl2;
-    this.highPrecisionInputRequested = !!gl2 && !!options.highPrecisionInput;
+    const gl = canvas.getContext("webgl2", contextAttributes);
+    if (!gl) throw new Error("WebGL2 not supported");
+    this.gl = gl;
+    this.highPrecisionInputRequested = !!options.highPrecisionInput;
 
-    this.halfFloatExt = gl.getExtension("OES_texture_half_float");
-    this.halfFloatLinearExt = gl.getExtension("OES_texture_half_float_linear");
-    if (gl2) {
-      this.float32RenderTargets = !!gl2.getExtension("EXT_color_buffer_float");
-      this.halfFloatRenderTargets =
-        this.float32RenderTargets ||
-        !!gl2.getExtension("EXT_color_buffer_half_float");
-      this.floatLinearFiltering = !!gl2.getExtension(
-        "OES_texture_float_linear",
-      );
-    }
+    this.float32RenderTargets = !!gl.getExtension("EXT_color_buffer_float");
+    this.halfFloatRenderTargets =
+      this.float32RenderTargets ||
+      !!gl.getExtension("EXT_color_buffer_half_float");
+    this.floatLinearFiltering = !!gl.getExtension("OES_texture_float_linear");
 
     this._warpIntensity = options.warpIntensity ?? 1.0;
     this._blurPasses = options.blurPasses ?? 8;
@@ -970,8 +956,8 @@ export class Kawarp {
 
   /**
    * Read a small RGBA8 thumbnail (size x size, bottom row of the rendered
-   * orientation first) of the current source, e.g. to measure brightness. WebGL2 reads asynchronously
-   * through a pixel buffer and fence; WebGL1 reads synchronously.
+   * orientation first) of the current source, e.g. to measure brightness.
+   * Reads asynchronously through a pixel buffer and fence.
    * Resolves to null when there is no source or the instance is disposed.
    */
   sampleSource(size = 32): Promise<Uint8Array | null> {
@@ -996,42 +982,36 @@ export class Kawarp {
     }
 
     const pixels = new Uint8Array(edge * edge * 4);
-    const gl2 = this.gl2;
-    if (!gl2) {
-      gl.readPixels(0, 0, edge, edge, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-      return Promise.resolve(pixels);
-    }
-
-    this.samplePixelBuffer ??= gl2.createBuffer();
-    gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, this.samplePixelBuffer);
-    gl2.bufferData(gl2.PIXEL_PACK_BUFFER, pixels.byteLength, gl2.STREAM_READ);
-    gl2.readPixels(0, 0, edge, edge, gl2.RGBA, gl2.UNSIGNED_BYTE, 0);
-    gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, null);
-    const fence = gl2.fenceSync(gl2.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    this.samplePixelBuffer ??= gl.createBuffer();
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.samplePixelBuffer);
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, pixels.byteLength, gl.STREAM_READ);
+    gl.readPixels(0, 0, edge, edge, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    const fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     if (!fence) return Promise.resolve(null);
-    gl2.flush();
+    gl.flush();
 
     // Timers keep polling in background tabs, where animation frames stop
     const sample = new Promise<Uint8Array | null>((resolve) => {
       const poll = () => {
         if (this.disposed) {
-          gl2.deleteSync(fence);
+          gl.deleteSync(fence);
           resolve(null);
           return;
         }
-        const status = gl2.clientWaitSync(fence, 0, 0);
-        if (status === gl2.TIMEOUT_EXPIRED) {
+        const status = gl.clientWaitSync(fence, 0, 0);
+        if (status === gl.TIMEOUT_EXPIRED) {
           setTimeout(poll, 4);
           return;
         }
-        gl2.deleteSync(fence);
-        if (status === gl2.WAIT_FAILED) {
+        gl.deleteSync(fence);
+        if (status === gl.WAIT_FAILED) {
           resolve(null);
           return;
         }
-        gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, this.samplePixelBuffer);
-        gl2.getBufferSubData(gl2.PIXEL_PACK_BUFFER, 0, pixels);
-        gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, null);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.samplePixelBuffer);
+        gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, pixels);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
         resolve(pixels);
       };
       setTimeout(poll, 0);
@@ -1075,9 +1055,7 @@ export class Kawarp {
   }
 
   private createByteFramebuffer(width: number, height: number): Framebuffer {
-    return this.gl2
-      ? this.createSizedFramebuffer(width, height, this.gl2.RGBA8)
-      : this.createFramebuffer(width, height);
+    return this.createSizedFramebuffer(width, height, this.gl.RGBA8);
   }
 
   private requestVideoFrame(): void {
@@ -1276,23 +1254,20 @@ export class Kawarp {
         this.highPrecisionInputRequested && this.float32RenderTargets;
       for (let i = 0; i < 2; i++) {
         this.videoHistory.push(
-          this.gl2 && float32History
+          float32History
             ? this.createSizedFramebuffer(
                 sampleWidth,
                 sampleHeight,
-                this.gl2.RGBA32F,
+                this.gl.RGBA32F,
               )
             : this.createFramebuffer(sampleWidth, sampleHeight, true),
         );
       }
-      const halfFloatHistory = this.gl2
-        ? this.halfFloatRenderTargets
-        : !!(this.halfFloatExt && this.halfFloatLinearExt);
       this.videoHistoryStep = float32History
         ? this.float32RenderTargets
           ? 0
           : 1 / 255
-        : halfFloatHistory
+        : this.halfFloatRenderTargets
           ? 1 / 1024
           : 1 / 255;
     }
@@ -1541,7 +1516,7 @@ export class Kawarp {
       gl.deleteProgram(this.samplingPrograms.downsample);
       gl.deleteProgram(this.samplingPrograms.smoothing);
     }
-    this.gl2?.deleteBuffer(this.samplePixelBuffer);
+    gl.deleteBuffer(this.samplePixelBuffer);
 
     gl.deleteProgram(this.blurProgram);
     gl.deleteProgram(this.blendProgram);
@@ -1674,7 +1649,7 @@ export class Kawarp {
 
     gl.shaderSource(
       shader,
-      this.gl2 && type === gl.FRAGMENT_SHADER
+      type === gl.FRAGMENT_SHADER
         ? `precision highp sampler2D;\n${source}`
         : source,
     );
@@ -1745,53 +1720,17 @@ export class Kawarp {
     height: number,
     useHighPrecision = false,
   ): Framebuffer {
-    if (this.gl2) {
-      return this.createSizedFramebuffer(
-        width,
-        height,
-        useHighPrecision && this.halfFloatRenderTargets
-          ? this.gl2.RGBA16F
-          : this.gl2.RGBA8,
-      );
-    }
-
-    const gl = this.gl;
-    const texture = this.createTexture();
-
-    const canUseHalfFloat =
-      useHighPrecision && this.halfFloatExt && this.halfFloatLinearExt;
-    const type = canUseHalfFloat
-      ? this.halfFloatExt!.HALF_FLOAT_OES
-      : gl.UNSIGNED_BYTE;
-
-    gl.texImage2D(
-      gl.TEXTURE_2D,
-      0,
-      gl.RGBA,
+    return this.createSizedFramebuffer(
       width,
       height,
-      0,
-      gl.RGBA,
-      type,
-      null,
+      useHighPrecision && this.halfFloatRenderTargets
+        ? this.gl.RGBA16F
+        : this.gl.RGBA8,
     );
-
-    const framebuffer = gl.createFramebuffer();
-    if (!framebuffer) throw new Error("Failed to create framebuffer");
-
-    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-    gl.framebufferTexture2D(
-      gl.FRAMEBUFFER,
-      gl.COLOR_ATTACHMENT0,
-      gl.TEXTURE_2D,
-      texture,
-      0,
-    );
-    return { framebuffer, texture, width, height };
   }
 
   /**
-   * WebGL2 render target with an explicit internal format. Float formats fall
+   * Render target with an explicit internal format. Float formats fall
    * back to RGBA8 when the driver reports them incomplete.
    */
   private createSizedFramebuffer(
@@ -1799,7 +1738,7 @@ export class Kawarp {
     height: number,
     internalFormat: number,
   ): Framebuffer {
-    const gl = this.gl2 as WebGL2RenderingContext;
+    const gl = this.gl;
     const texture = this.createTexture();
     const pixelType =
       internalFormat === gl.RGBA32F
@@ -1858,8 +1797,8 @@ export class Kawarp {
   }
 
   private applyFloatDrawingBuffer(): void {
-    const gl = this.gl2 as FloatDrawingBufferContext | null;
-    if (!gl?.drawingBufferStorage || !this.halfFloatRenderTargets) return;
+    const gl = this.gl as FloatDrawingBufferContext;
+    if (!gl.drawingBufferStorage || !this.halfFloatRenderTargets) return;
     gl.drawingBufferStorage(
       gl.RGBA16F,
       Math.max(1, this.canvas.width),

@@ -15,7 +15,7 @@ const AMBER: Rgb = [230, 150, 40];
 const VIOLET: Rgb = [120, 50, 200];
 
 const CONTEXTS: [string, KawarpContextOptions][] = [
-  ["WebGL1", {}],
+  ["default", {}],
   ["WebGL2 high precision", { highPrecisionInput: true }],
 ];
 
@@ -121,7 +121,7 @@ describe.each(CONTEXTS)("sampleSource on %s", (_name, contextOptions) => {
 });
 
 describe("sampleSource concurrency and lifetime", () => {
-  it("shares one pending read between concurrent calls on WebGL2", async () => {
+  it("shares one pending read between concurrent calls", async () => {
     const instance = createKawarp({ highPrecisionInput: true });
     instance.loadImageElement(createSolidCanvas(AMBER));
     const first = instance.sampleSource(8);

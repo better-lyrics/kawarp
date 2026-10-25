@@ -38,7 +38,7 @@ const TEAL: Rgb = [30, 170, 160];
 const BLUE: Rgb = [40, 60, 210];
 
 const CONTEXTS: [string, KawarpContextOptions][] = [
-  ["WebGL1", {}],
+  ["default", {}],
   ["WebGL2 high precision", { highPrecisionInput: true }],
 ];
 
