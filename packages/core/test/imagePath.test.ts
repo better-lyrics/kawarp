@@ -16,15 +16,16 @@ import {
 
 const RENDER_TIME = 1.25;
 
+// Dithering moved to blue noise, so the pipeline is compared undithered
 const OPTION_SETS: KawarpOptions[] = [
-  {},
+  { dithering: 0 },
   {
     warpIntensity: 0.6,
     blurPasses: 3,
     saturation: 1.2,
     tintColor: [0.3, 0.1, 0.4],
     tintIntensity: 0.4,
-    dithering: 0.02,
+    dithering: 0,
     scale: 1.3,
   },
 ];
@@ -48,11 +49,11 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-describe("default image path matches @kawarp/core 1.2.2", () => {
+describe("default image path matches the @kawarp/core 1.2.2 WebGL1 path within one step", () => {
   it.each(OPTION_SETS)("renders identical pixels for %o", (options) => {
     const current = renderImage(Kawarp, options);
     const baseline = renderImage(BaselineKawarp, options);
-    expect(countDifferentBytes(current.data, baseline.data)).toBe(0);
+    expect(countDifferentBytes(current.data, baseline.data, 1)).toBe(0);
   });
 
   it("re-blurs identically when blur, tint, and saturation change after load", () => {
@@ -62,9 +63,9 @@ describe("default image path matches @kawarp/core 1.2.2", () => {
       instance.tintColor = [0.2, 0.5, 0.1];
       instance.saturation = 0.8;
     };
-    const current = renderImage(Kawarp, {}, configure);
-    const baseline = renderImage(BaselineKawarp, {}, configure);
-    expect(countDifferentBytes(current.data, baseline.data)).toBe(0);
+    const current = renderImage(Kawarp, { dithering: 0 }, configure);
+    const baseline = renderImage(BaselineKawarp, { dithering: 0 }, configure);
+    expect(countDifferentBytes(current.data, baseline.data, 1)).toBe(0);
   });
 
   it("renders identically when a second image replaces the first", () => {
@@ -72,9 +73,9 @@ describe("default image path matches @kawarp/core 1.2.2", () => {
       instance.transitionDuration = 0;
       instance.loadImageElement(createSolidCanvas([30, 160, 220]));
     };
-    const current = renderImage(Kawarp, {}, configure);
-    const baseline = renderImage(BaselineKawarp, {}, configure);
-    expect(countDifferentBytes(current.data, baseline.data)).toBe(0);
+    const current = renderImage(Kawarp, { dithering: 0 }, configure);
+    const baseline = renderImage(BaselineKawarp, { dithering: 0 }, configure);
+    expect(countDifferentBytes(current.data, baseline.data, 1)).toBe(0);
   });
 
   it("keeps the getOptions shape", () => {
@@ -86,10 +87,10 @@ describe("default image path matches @kawarp/core 1.2.2", () => {
     expect(current.getOptions()).toEqual(baseline.getOptions());
   });
 
-  it("uses a WebGL1 context and reports no high-precision paths by default", () => {
+  it("uses a WebGL2 context and reports no high-precision paths by default", () => {
     const canvas = createCanvas();
     const instance = new Kawarp(canvas);
-    expect(canvas.getContext("webgl")).not.toBeNull();
+    expect(canvas.getContext("webgl2")).not.toBeNull();
     expect(instance.highPrecisionInput).toBe(false);
     expect(instance.highPrecisionOutput).toBe(false);
   });
@@ -97,8 +98,11 @@ describe("default image path matches @kawarp/core 1.2.2", () => {
 
 describe("high-precision contexts", () => {
   it("renders the image path on WebGL2 within one step of the default path", () => {
-    const current = renderImage(Kawarp, { highPrecisionInput: true });
-    const baseline = renderImage(BaselineKawarp, {});
+    const current = renderImage(Kawarp, {
+      highPrecisionInput: true,
+      dithering: 0,
+    });
+    const baseline = renderImage(BaselineKawarp, { dithering: 0 });
     expect(countDifferentBytes(current.data, baseline.data, 1)).toBe(0);
   });
 

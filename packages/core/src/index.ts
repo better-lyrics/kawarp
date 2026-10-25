@@ -2,7 +2,7 @@
  * Kawarp - Fluid Animated Background Renderer
  *
  * Creates a fluid, animated background effect similar to Apple Music's album art visualization.
- * Uses WebGL with Kawase blur and domain warping techniques.
+ * Uses WebGL2 with Kawase blur and domain warping techniques.
  *
  * Optimized architecture:
  * - Blur runs on small textures (128x128) only when image changes
@@ -11,6 +11,12 @@
  * - High-precision FBO tracking and resolution management
  * - Robust CORS and blob/imageBitmap loading
  */
+
+import {
+  BLUE_NOISE_CHANNEL_OFFSETS,
+  BLUE_NOISE_SIZE,
+  decodeBlueNoise,
+} from "./blueNoise.js";
 
 export interface KawarpOptions {
   warpIntensity?: number;
@@ -25,9 +31,9 @@ export interface KawarpOptions {
 }
 
 export interface KawarpContextOptions {
-  /** Use WebGL2 with float32 color history for smoothed video. Creation only. */
+  /** Keep float32 color history for smoothed video. Creation only. */
   highPrecisionInput?: boolean;
-  /** Request a float16 WebGL2 drawing buffer, falling back to RGBA8. Creation only. */
+  /** Request a float16 drawing buffer, falling back to RGBA8. Creation only. */
   highPrecisionOutput?: boolean;
 }
 
@@ -63,6 +69,10 @@ const DEFAULT_VIDEO_OPTIONS = {
   frameRate: 0,
   smoothing: 0,
 };
+
+// R2 sequence: per-frame tile shifts that cover the tile evenly over time
+const R2_X = 0.7548776662466927;
+const R2_Y = 0.5698402909980532;
 
 // A media-time jump larger than this between frames is a seek, not playback.
 const VIDEO_SEEK_THRESHOLD_SECONDS = 0.25;
@@ -226,20 +236,28 @@ const DOMAIN_WARP_SHADER = `
   }
 `;
 
+// Dithers each channel with its own blue noise, reshaped to a triangular
+// distribution so the noise level does not vary with the signal
 const OUTPUT_SHADER = `
   precision highp float;
   uniform sampler2D u_texture;
+  uniform sampler2D u_blueNoise;
   uniform float u_saturation;
   uniform float u_dithering;
-  uniform float u_time;
   uniform float u_scale;
-  uniform vec2 u_resolution;
+  uniform vec2 u_noiseOffset;
+  uniform vec2 u_channelOffsets[3];
   varying vec2 v_texCoord;
 
-  highp float hash(highp vec3 p) {
-    p = fract(p * 0.1031);
-    p += dot(p, p.zyx + 31.32);
-    return fract((p.x + p.y) * p.z);
+  float blueNoise(vec2 offset) {
+    vec2 texel = gl_FragCoord.xy + u_noiseOffset + offset;
+    return (texture2D(u_blueNoise, texel / ${BLUE_NOISE_SIZE}.0).r * 255.0 + 0.5) / 256.0;
+  }
+
+  // Uniform (0, 1) to triangular (-1, 1)
+  float triangular(float u) {
+    float v = u * 2.0 - 1.0;
+    return sign(v) * (1.0 - sqrt(1.0 - abs(v)));
   }
 
   void main() {
@@ -255,28 +273,35 @@ const OUTPUT_SHADER = `
     float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
     color.rgb = mix(vec3(gray), color.rgb, u_saturation);
 
-    highp vec2 pixelPos = floor(v_texCoord * u_resolution);
-    highp float noise = hash(vec3(pixelPos, floor(u_time * 60.0)));
-    color.rgb += (noise - 0.5) * u_dithering;
+    vec3 noise = vec3(
+      triangular(blueNoise(u_channelOffsets[0])),
+      triangular(blueNoise(u_channelOffsets[1])),
+      triangular(blueNoise(u_channelOffsets[2]))
+    );
+    color.rgb += noise * (u_dithering * 0.5);
 
     gl_FragColor = color;
   }
 `;
 
-// Four bilinear taps average a 4x4 source footprint for reductions up to 4x
+// Four bilinear taps average a 4x4 source footprint for reductions up to 4x.
+// u_flipY turns top-down video uploads upright without UNPACK_FLIP_Y_WEBGL,
+// which can force browsers off their zero-copy video upload path.
 const DOWNSAMPLE_SHADER = `
   precision highp float;
   uniform sampler2D u_texture;
   uniform vec2 u_texelSize;
+  uniform float u_flipY;
   varying vec2 v_texCoord;
 
   void main() {
+    vec2 uv = vec2(v_texCoord.x, mix(v_texCoord.y, 1.0 - v_texCoord.y, u_flipY));
     vec2 offset = u_texelSize * 0.25;
     gl_FragColor = 0.25 * (
-      texture2D(u_texture, v_texCoord + vec2(-offset.x, -offset.y)) +
-      texture2D(u_texture, v_texCoord + vec2(offset.x, -offset.y)) +
-      texture2D(u_texture, v_texCoord + vec2(-offset.x, offset.y)) +
-      texture2D(u_texture, v_texCoord + vec2(offset.x, offset.y))
+      texture2D(u_texture, uv + vec2(-offset.x, -offset.y)) +
+      texture2D(u_texture, uv + vec2(offset.x, -offset.y)) +
+      texture2D(u_texture, uv + vec2(-offset.x, offset.y)) +
+      texture2D(u_texture, uv + vec2(offset.x, offset.y))
     );
   }
 `;
@@ -311,6 +336,7 @@ interface SamplingPrograms {
   downsampleUniforms: {
     texture: WebGLUniformLocation;
     texelSize: WebGLUniformLocation;
+    flipY: WebGLUniformLocation;
   };
   smoothingUniforms: {
     texture: WebGLUniformLocation;
@@ -322,9 +348,7 @@ interface SamplingPrograms {
 
 export class Kawarp {
   private canvas: HTMLCanvasElement;
-  private gl: WebGLRenderingContext;
-  private halfFloatExt: OES_texture_half_float | null = null;
-  private halfFloatLinearExt: OES_texture_half_float_linear | null = null;
+  private gl: WebGL2RenderingContext;
 
   // Shader programs
   private blurProgram: WebGLProgram;
@@ -339,6 +363,10 @@ export class Kawarp {
 
   // Source texture (original image)
   private sourceTexture: WebGLTexture;
+
+  // Tileable blue noise for output dithering, shifted every frame
+  private blueNoiseTexture: WebGLTexture;
+  private frameIndex = 0;
 
   // Small FBOs for blur (BLUR_SIZE x BLUR_SIZE)
   private blurFBO1: Framebuffer;
@@ -375,8 +403,7 @@ export class Kawarp {
   private _scale: number;
   private hasImage = false;
 
-  // WebGL2 high-precision state (null/false on the default WebGL1 path)
-  private gl2: WebGL2RenderingContext | null;
+  // Float render target support
   private halfFloatRenderTargets = false;
   private float32RenderTargets = false;
   private floatLinearFiltering = false;
@@ -458,11 +485,12 @@ export class Kawarp {
     };
     output: {
       texture: WebGLUniformLocation;
+      blueNoise: WebGLUniformLocation;
       saturation: WebGLUniformLocation;
       dithering: WebGLUniformLocation;
-      time: WebGLUniformLocation;
       scale: WebGLUniformLocation;
-      resolution: WebGLUniformLocation;
+      noiseOffset: WebGLUniformLocation;
+      channelOffsets: WebGLUniformLocation;
     };
   };
 
@@ -480,27 +508,16 @@ export class Kawarp {
       preserveDrawingBuffer: true,
       powerPreference: "high-performance",
     };
-    const gl2 =
-      options.highPrecisionInput || options.highPrecisionOutput
-        ? canvas.getContext("webgl2", contextAttributes)
-        : null;
-    const gl = gl2 ?? canvas.getContext("webgl", contextAttributes);
-    if (!gl) throw new Error("WebGL not supported");
-    this.gl = gl as WebGLRenderingContext;
-    this.gl2 = gl2;
-    this.highPrecisionInputRequested = !!gl2 && !!options.highPrecisionInput;
+    const gl = canvas.getContext("webgl2", contextAttributes);
+    if (!gl) throw new Error("WebGL2 not supported");
+    this.gl = gl;
+    this.highPrecisionInputRequested = !!options.highPrecisionInput;
 
-    this.halfFloatExt = gl.getExtension("OES_texture_half_float");
-    this.halfFloatLinearExt = gl.getExtension("OES_texture_half_float_linear");
-    if (gl2) {
-      this.float32RenderTargets = !!gl2.getExtension("EXT_color_buffer_float");
-      this.halfFloatRenderTargets =
-        this.float32RenderTargets ||
-        !!gl2.getExtension("EXT_color_buffer_half_float");
-      this.floatLinearFiltering = !!gl2.getExtension(
-        "OES_texture_float_linear",
-      );
-    }
+    this.float32RenderTargets = !!gl.getExtension("EXT_color_buffer_float");
+    this.halfFloatRenderTargets =
+      this.float32RenderTargets ||
+      !!gl.getExtension("EXT_color_buffer_half_float");
+    this.floatLinearFiltering = !!gl.getExtension("OES_texture_float_linear");
 
     this._warpIntensity = options.warpIntensity ?? 1.0;
     this._blurPasses = options.blurPasses ?? 8;
@@ -554,10 +571,17 @@ export class Kawarp {
       output: {
         texture: gl.getUniformLocation(this.outputProgram, "u_texture")!,
         saturation: gl.getUniformLocation(this.outputProgram, "u_saturation")!,
+        blueNoise: gl.getUniformLocation(this.outputProgram, "u_blueNoise")!,
         dithering: gl.getUniformLocation(this.outputProgram, "u_dithering")!,
-        time: gl.getUniformLocation(this.outputProgram, "u_time")!,
         scale: gl.getUniformLocation(this.outputProgram, "u_scale")!,
-        resolution: gl.getUniformLocation(this.outputProgram, "u_resolution")!,
+        noiseOffset: gl.getUniformLocation(
+          this.outputProgram,
+          "u_noiseOffset",
+        )!,
+        channelOffsets: gl.getUniformLocation(
+          this.outputProgram,
+          "u_channelOffsets",
+        )!,
       },
     };
 
@@ -572,6 +596,7 @@ export class Kawarp {
     // Create source texture
     this.sourceTexture = this.createTexture();
     this.activeSourceTexture = this.sourceTexture;
+    this.blueNoiseTexture = this.createBlueNoiseTexture();
 
     // Create small FBOs for blur operations (high precision to avoid banding)
     this.blurFBO1 = this.createFramebuffer(BLUR_SIZE, BLUR_SIZE, true);
@@ -970,8 +995,8 @@ export class Kawarp {
 
   /**
    * Read a small RGBA8 thumbnail (size x size, bottom row of the rendered
-   * orientation first) of the current source, e.g. to measure brightness. WebGL2 reads asynchronously
-   * through a pixel buffer and fence; WebGL1 reads synchronously.
+   * orientation first) of the current source, e.g. to measure brightness.
+   * Reads asynchronously through a pixel buffer and fence.
    * Resolves to null when there is no source or the instance is disposed.
    */
   sampleSource(size = 32): Promise<Uint8Array | null> {
@@ -996,42 +1021,36 @@ export class Kawarp {
     }
 
     const pixels = new Uint8Array(edge * edge * 4);
-    const gl2 = this.gl2;
-    if (!gl2) {
-      gl.readPixels(0, 0, edge, edge, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-      return Promise.resolve(pixels);
-    }
-
-    this.samplePixelBuffer ??= gl2.createBuffer();
-    gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, this.samplePixelBuffer);
-    gl2.bufferData(gl2.PIXEL_PACK_BUFFER, pixels.byteLength, gl2.STREAM_READ);
-    gl2.readPixels(0, 0, edge, edge, gl2.RGBA, gl2.UNSIGNED_BYTE, 0);
-    gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, null);
-    const fence = gl2.fenceSync(gl2.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    this.samplePixelBuffer ??= gl.createBuffer();
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.samplePixelBuffer);
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, pixels.byteLength, gl.STREAM_READ);
+    gl.readPixels(0, 0, edge, edge, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    const fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     if (!fence) return Promise.resolve(null);
-    gl2.flush();
+    gl.flush();
 
     // Timers keep polling in background tabs, where animation frames stop
     const sample = new Promise<Uint8Array | null>((resolve) => {
       const poll = () => {
         if (this.disposed) {
-          gl2.deleteSync(fence);
+          gl.deleteSync(fence);
           resolve(null);
           return;
         }
-        const status = gl2.clientWaitSync(fence, 0, 0);
-        if (status === gl2.TIMEOUT_EXPIRED) {
+        const status = gl.clientWaitSync(fence, 0, 0);
+        if (status === gl.TIMEOUT_EXPIRED) {
           setTimeout(poll, 4);
           return;
         }
-        gl2.deleteSync(fence);
-        if (status === gl2.WAIT_FAILED) {
+        gl.deleteSync(fence);
+        if (status === gl.WAIT_FAILED) {
           resolve(null);
           return;
         }
-        gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, this.samplePixelBuffer);
-        gl2.getBufferSubData(gl2.PIXEL_PACK_BUFFER, 0, pixels);
-        gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, null);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.samplePixelBuffer);
+        gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, pixels);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
         resolve(pixels);
       };
       setTimeout(poll, 0);
@@ -1075,9 +1094,7 @@ export class Kawarp {
   }
 
   private createByteFramebuffer(width: number, height: number): Framebuffer {
-    return this.gl2
-      ? this.createSizedFramebuffer(width, height, this.gl2.RGBA8)
-      : this.createFramebuffer(width, height);
+    return this.createSizedFramebuffer(width, height, this.gl.RGBA8);
   }
 
   private requestVideoFrame(): void {
@@ -1135,7 +1152,6 @@ export class Kawarp {
       this.prepareVideoTargets(video.videoWidth, video.videoHeight);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.videoUploadTexture);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
       gl.texImage2D(
         gl.TEXTURE_2D,
         0,
@@ -1149,13 +1165,16 @@ export class Kawarp {
       this.unloadVideo();
       onError?.(error);
       return;
-    } finally {
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     }
 
+    // The upload is top-down; the first stage flips it upright
     let frameTexture = this.videoUploadTexture as WebGLTexture;
     for (const stage of this.videoStages) {
-      this.drawDownsample(frameTexture, stage);
+      this.drawDownsample(
+        frameTexture,
+        stage,
+        frameTexture === this.videoUploadTexture,
+      );
       frameTexture = stage.texture;
     }
 
@@ -1276,23 +1295,20 @@ export class Kawarp {
         this.highPrecisionInputRequested && this.float32RenderTargets;
       for (let i = 0; i < 2; i++) {
         this.videoHistory.push(
-          this.gl2 && float32History
+          float32History
             ? this.createSizedFramebuffer(
                 sampleWidth,
                 sampleHeight,
-                this.gl2.RGBA32F,
+                this.gl.RGBA32F,
               )
             : this.createFramebuffer(sampleWidth, sampleHeight, true),
         );
       }
-      const halfFloatHistory = this.gl2
-        ? this.halfFloatRenderTargets
-        : !!(this.halfFloatExt && this.halfFloatLinearExt);
       this.videoHistoryStep = float32History
         ? this.float32RenderTargets
           ? 0
           : 1 / 255
-        : halfFloatHistory
+        : this.halfFloatRenderTargets
           ? 1 / 1024
           : 1 / 255;
     }
@@ -1344,6 +1360,7 @@ export class Kawarp {
       downsampleUniforms: {
         texture: gl.getUniformLocation(downsample, "u_texture")!,
         texelSize: gl.getUniformLocation(downsample, "u_texelSize")!,
+        flipY: gl.getUniformLocation(downsample, "u_flipY")!,
       },
       smoothingUniforms: {
         texture: gl.getUniformLocation(smoothing, "u_texture")!,
@@ -1355,7 +1372,11 @@ export class Kawarp {
     return this.samplingPrograms;
   }
 
-  private drawDownsample(source: WebGLTexture, target: Framebuffer): void {
+  private drawDownsample(
+    source: WebGLTexture,
+    target: Framebuffer,
+    flipY = false,
+  ): void {
     const gl = this.gl;
     const programs = this.getSamplingPrograms();
     gl.useProgram(programs.downsample);
@@ -1370,6 +1391,7 @@ export class Kawarp {
       1 / target.width,
       1 / target.height,
     );
+    gl.uniform1f(programs.downsampleUniforms.flipY, flipY ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
@@ -1541,7 +1563,7 @@ export class Kawarp {
       gl.deleteProgram(this.samplingPrograms.downsample);
       gl.deleteProgram(this.samplingPrograms.smoothing);
     }
-    this.gl2?.deleteBuffer(this.samplePixelBuffer);
+    gl.deleteBuffer(this.samplePixelBuffer);
 
     gl.deleteProgram(this.blurProgram);
     gl.deleteProgram(this.blendProgram);
@@ -1552,6 +1574,7 @@ export class Kawarp {
     gl.deleteBuffer(this.positionBuffer);
     gl.deleteBuffer(this.texCoordBuffer);
     gl.deleteTexture(this.sourceTexture);
+    gl.deleteTexture(this.blueNoiseTexture);
 
     this.deleteFramebuffer(this.blurFBO1);
     this.deleteFramebuffer(this.blurFBO2);
@@ -1645,13 +1668,26 @@ export class Kawarp {
     this.setupAttributes();
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, width, height);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.blueNoiseTexture);
+    gl.uniform1i(this.uniforms.output.blueNoise, 1);
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.warpFBO.texture);
     gl.uniform1i(this.uniforms.output.texture, 0);
     gl.uniform1f(this.uniforms.output.saturation, this._saturation);
     gl.uniform1f(this.uniforms.output.dithering, this._dithering);
-    gl.uniform1f(this.uniforms.output.time, time);
     gl.uniform1f(this.uniforms.output.scale, this._scale);
-    gl.uniform2f(this.uniforms.output.resolution, width, height);
+    // A fresh noise pattern every drawn frame, whatever the display rate
+    const frame = this.frameIndex++;
+    gl.uniform2f(
+      this.uniforms.output.noiseOffset,
+      Math.floor(((frame * R2_X) % 1) * BLUE_NOISE_SIZE),
+      Math.floor(((frame * R2_Y) % 1) * BLUE_NOISE_SIZE),
+    );
+    gl.uniform2fv(
+      this.uniforms.output.channelOffsets,
+      BLUE_NOISE_CHANNEL_OFFSETS,
+    );
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
@@ -1674,7 +1710,7 @@ export class Kawarp {
 
     gl.shaderSource(
       shader,
-      this.gl2 && type === gl.FRAGMENT_SHADER
+      type === gl.FRAGMENT_SHADER
         ? `precision highp sampler2D;\n${source}`
         : source,
     );
@@ -1740,58 +1776,47 @@ export class Kawarp {
     return texture;
   }
 
+  private createBlueNoiseTexture(): WebGLTexture {
+    const gl = this.gl;
+    const texture = gl.createTexture();
+    if (!texture) throw new Error("Failed to create texture");
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.R8,
+      BLUE_NOISE_SIZE,
+      BLUE_NOISE_SIZE,
+      0,
+      gl.RED,
+      gl.UNSIGNED_BYTE,
+      decodeBlueNoise(),
+    );
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    return texture;
+  }
+
   private createFramebuffer(
     width: number,
     height: number,
     useHighPrecision = false,
   ): Framebuffer {
-    if (this.gl2) {
-      return this.createSizedFramebuffer(
-        width,
-        height,
-        useHighPrecision && this.halfFloatRenderTargets
-          ? this.gl2.RGBA16F
-          : this.gl2.RGBA8,
-      );
-    }
-
-    const gl = this.gl;
-    const texture = this.createTexture();
-
-    const canUseHalfFloat =
-      useHighPrecision && this.halfFloatExt && this.halfFloatLinearExt;
-    const type = canUseHalfFloat
-      ? this.halfFloatExt!.HALF_FLOAT_OES
-      : gl.UNSIGNED_BYTE;
-
-    gl.texImage2D(
-      gl.TEXTURE_2D,
-      0,
-      gl.RGBA,
+    return this.createSizedFramebuffer(
       width,
       height,
-      0,
-      gl.RGBA,
-      type,
-      null,
+      useHighPrecision && this.halfFloatRenderTargets
+        ? this.gl.RGBA16F
+        : this.gl.RGBA8,
     );
-
-    const framebuffer = gl.createFramebuffer();
-    if (!framebuffer) throw new Error("Failed to create framebuffer");
-
-    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-    gl.framebufferTexture2D(
-      gl.FRAMEBUFFER,
-      gl.COLOR_ATTACHMENT0,
-      gl.TEXTURE_2D,
-      texture,
-      0,
-    );
-    return { framebuffer, texture, width, height };
   }
 
   /**
-   * WebGL2 render target with an explicit internal format. Float formats fall
+   * Render target with an explicit internal format. Float formats fall
    * back to RGBA8 when the driver reports them incomplete.
    */
   private createSizedFramebuffer(
@@ -1799,7 +1824,7 @@ export class Kawarp {
     height: number,
     internalFormat: number,
   ): Framebuffer {
-    const gl = this.gl2 as WebGL2RenderingContext;
+    const gl = this.gl;
     const texture = this.createTexture();
     const pixelType =
       internalFormat === gl.RGBA32F
@@ -1858,8 +1883,8 @@ export class Kawarp {
   }
 
   private applyFloatDrawingBuffer(): void {
-    const gl = this.gl2 as FloatDrawingBufferContext | null;
-    if (!gl?.drawingBufferStorage || !this.halfFloatRenderTargets) return;
+    const gl = this.gl as FloatDrawingBufferContext;
+    if (!gl.drawingBufferStorage || !this.halfFloatRenderTargets) return;
     gl.drawingBufferStorage(
       gl.RGBA16F,
       Math.max(1, this.canvas.width),

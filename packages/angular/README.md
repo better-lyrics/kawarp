@@ -42,7 +42,7 @@ export class AppComponent {}
 | `saturation` | `number` | `1.5` | Color saturation multiplier |
 | `tintColor` | `[number, number, number]` | `[0.16, 0.16, 0.24]` | Tint color for dark areas (0-1) |
 | `tintIntensity` | `number` | `0.15` | Tint effect strength (0-1) |
-| `dithering` | `number` | `0.008` | Dithering strength (0-0.1) |
+| `dithering` | `number` | `0.008` | Peak-to-peak dither width (0-0.1); 0.008 is about one 8-bit step either way |
 | `scale` | `number` | `1.0` | Overall zoom level of the effect (0.01-4) |
 
 ## Methods
