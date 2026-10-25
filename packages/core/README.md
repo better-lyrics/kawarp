@@ -1,6 +1,6 @@
 # @kawarp/core
 
-Fluid animated background renderer using WebGL, Kawase blur, and domain warping. Creates effects similar to Apple Music's album art visualization. Zero dependencies.
+Fluid animated background renderer using WebGL2, Kawase blur, and domain warping. Creates effects similar to Apple Music's album art visualization. Zero dependencies.
 
 ## Installation
 
@@ -31,7 +31,7 @@ kawarp.start();
 | `saturation` | number | 1.5 | Color saturation multiplier |
 | `tintColor` | [r, g, b] | [0.16, 0.16, 0.24] | Tint color for dark areas (0-1) |
 | `tintIntensity` | number | 0.15 | Tint effect strength (0-1) |
-| `dithering` | number | 0.008 | Dithering strength (0-0.1) |
+| `dithering` | number | 0.008 | Peak-to-peak dither width (0-0.1); 0.008 is about one 8-bit step either way |
 | `scale` | number | 1.0 | Overall zoom level of the effect (0.01-4) |
 
 ## Methods
@@ -78,7 +78,7 @@ Video renders upright. Still images keep the vertically flipped orientation Kawa
 
 ## Source Sampling
 
-`sampleSource(size?)` resolves to a small RGBA thumbnail (`size` x `size`, 32 by default, bottom row of what's drawn first) of the current image or video frame. Use it for cheap measurements like brightness. On WebGL2 the read goes through a pixel buffer and a fence, so it doesn't wait on the GPU. On WebGL1 it's a synchronous read of a few kilobytes.
+`sampleSource(size?)` resolves to a small RGBA thumbnail (`size` x `size`, 32 by default, bottom row of what's drawn first) of the current image or video frame. Use it for cheap measurements like brightness. The read goes through a pixel buffer and a fence, so it doesn't wait on the GPU.
 
 ```javascript
 const pixels = await kawarp.sampleSource(16);
@@ -86,7 +86,7 @@ const pixels = await kawarp.sampleSource(16);
 
 ## High Precision
 
-Two creation-only options opt into WebGL2. Without them Kawarp uses the same WebGL1 pipeline as before.
+Kawarp requires WebGL2 and renders through half-float targets where the GPU supports them. Two creation-only options raise precision further.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -98,6 +98,10 @@ const kawarp = new Kawarp(canvas, { highPrecisionInput: true });
 ```
 
 `kawarp.highPrecisionInput` and `kawarp.highPrecisionOutput` tell you what the browser actually granted. A float16 drawing buffer cuts banding in dark gradients. It won't make anything brighter than SDR white.
+
+## Dithering
+
+The output is dithered with tileable blue noise, reshaped to a triangular distribution, with separate noise per color channel and a new pattern every drawn frame. Blue noise keeps the grain fine and even, so banding disappears at a lower visible noise level than white noise. The default `dithering` of 0.008 spans about one 8-bit step either way. On a float16 drawing buffer shown on a 10-bit display, roughly a quarter of that is enough.
 
 ## License
 

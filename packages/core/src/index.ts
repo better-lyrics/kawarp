@@ -12,6 +12,12 @@
  * - Robust CORS and blob/imageBitmap loading
  */
 
+import {
+  BLUE_NOISE_CHANNEL_OFFSETS,
+  BLUE_NOISE_SIZE,
+  decodeBlueNoise,
+} from "./blueNoise.js";
+
 export interface KawarpOptions {
   warpIntensity?: number;
   blurPasses?: number;
@@ -63,6 +69,10 @@ const DEFAULT_VIDEO_OPTIONS = {
   frameRate: 0,
   smoothing: 0,
 };
+
+// R2 sequence: per-frame tile shifts that cover the tile evenly over time
+const R2_X = 0.7548776662466927;
+const R2_Y = 0.5698402909980532;
 
 // A media-time jump larger than this between frames is a seek, not playback.
 const VIDEO_SEEK_THRESHOLD_SECONDS = 0.25;
@@ -226,20 +236,28 @@ const DOMAIN_WARP_SHADER = `
   }
 `;
 
+// Dithers each channel with its own blue noise, reshaped to a triangular
+// distribution so the noise level does not vary with the signal
 const OUTPUT_SHADER = `
   precision highp float;
   uniform sampler2D u_texture;
+  uniform sampler2D u_blueNoise;
   uniform float u_saturation;
   uniform float u_dithering;
-  uniform float u_time;
   uniform float u_scale;
-  uniform vec2 u_resolution;
+  uniform vec2 u_noiseOffset;
+  uniform vec2 u_channelOffsets[3];
   varying vec2 v_texCoord;
 
-  highp float hash(highp vec3 p) {
-    p = fract(p * 0.1031);
-    p += dot(p, p.zyx + 31.32);
-    return fract((p.x + p.y) * p.z);
+  float blueNoise(vec2 offset) {
+    vec2 texel = gl_FragCoord.xy + u_noiseOffset + offset;
+    return (texture2D(u_blueNoise, texel / ${BLUE_NOISE_SIZE}.0).r * 255.0 + 0.5) / 256.0;
+  }
+
+  // Uniform (0, 1) to triangular (-1, 1)
+  float triangular(float u) {
+    float v = u * 2.0 - 1.0;
+    return sign(v) * (1.0 - sqrt(1.0 - abs(v)));
   }
 
   void main() {
@@ -255,9 +273,12 @@ const OUTPUT_SHADER = `
     float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
     color.rgb = mix(vec3(gray), color.rgb, u_saturation);
 
-    highp vec2 pixelPos = floor(v_texCoord * u_resolution);
-    highp float noise = hash(vec3(pixelPos, floor(u_time * 60.0)));
-    color.rgb += (noise - 0.5) * u_dithering;
+    vec3 noise = vec3(
+      triangular(blueNoise(u_channelOffsets[0])),
+      triangular(blueNoise(u_channelOffsets[1])),
+      triangular(blueNoise(u_channelOffsets[2]))
+    );
+    color.rgb += noise * (u_dithering * 0.5);
 
     gl_FragColor = color;
   }
@@ -342,6 +363,10 @@ export class Kawarp {
 
   // Source texture (original image)
   private sourceTexture: WebGLTexture;
+
+  // Tileable blue noise for output dithering, shifted every frame
+  private blueNoiseTexture: WebGLTexture;
+  private frameIndex = 0;
 
   // Small FBOs for blur (BLUR_SIZE x BLUR_SIZE)
   private blurFBO1: Framebuffer;
@@ -460,11 +485,12 @@ export class Kawarp {
     };
     output: {
       texture: WebGLUniformLocation;
+      blueNoise: WebGLUniformLocation;
       saturation: WebGLUniformLocation;
       dithering: WebGLUniformLocation;
-      time: WebGLUniformLocation;
       scale: WebGLUniformLocation;
-      resolution: WebGLUniformLocation;
+      noiseOffset: WebGLUniformLocation;
+      channelOffsets: WebGLUniformLocation;
     };
   };
 
@@ -545,10 +571,17 @@ export class Kawarp {
       output: {
         texture: gl.getUniformLocation(this.outputProgram, "u_texture")!,
         saturation: gl.getUniformLocation(this.outputProgram, "u_saturation")!,
+        blueNoise: gl.getUniformLocation(this.outputProgram, "u_blueNoise")!,
         dithering: gl.getUniformLocation(this.outputProgram, "u_dithering")!,
-        time: gl.getUniformLocation(this.outputProgram, "u_time")!,
         scale: gl.getUniformLocation(this.outputProgram, "u_scale")!,
-        resolution: gl.getUniformLocation(this.outputProgram, "u_resolution")!,
+        noiseOffset: gl.getUniformLocation(
+          this.outputProgram,
+          "u_noiseOffset",
+        )!,
+        channelOffsets: gl.getUniformLocation(
+          this.outputProgram,
+          "u_channelOffsets",
+        )!,
       },
     };
 
@@ -563,6 +596,7 @@ export class Kawarp {
     // Create source texture
     this.sourceTexture = this.createTexture();
     this.activeSourceTexture = this.sourceTexture;
+    this.blueNoiseTexture = this.createBlueNoiseTexture();
 
     // Create small FBOs for blur operations (high precision to avoid banding)
     this.blurFBO1 = this.createFramebuffer(BLUR_SIZE, BLUR_SIZE, true);
@@ -1540,6 +1574,7 @@ export class Kawarp {
     gl.deleteBuffer(this.positionBuffer);
     gl.deleteBuffer(this.texCoordBuffer);
     gl.deleteTexture(this.sourceTexture);
+    gl.deleteTexture(this.blueNoiseTexture);
 
     this.deleteFramebuffer(this.blurFBO1);
     this.deleteFramebuffer(this.blurFBO2);
@@ -1633,13 +1668,26 @@ export class Kawarp {
     this.setupAttributes();
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, width, height);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.blueNoiseTexture);
+    gl.uniform1i(this.uniforms.output.blueNoise, 1);
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.warpFBO.texture);
     gl.uniform1i(this.uniforms.output.texture, 0);
     gl.uniform1f(this.uniforms.output.saturation, this._saturation);
     gl.uniform1f(this.uniforms.output.dithering, this._dithering);
-    gl.uniform1f(this.uniforms.output.time, time);
     gl.uniform1f(this.uniforms.output.scale, this._scale);
-    gl.uniform2f(this.uniforms.output.resolution, width, height);
+    // A fresh noise pattern every drawn frame, whatever the display rate
+    const frame = this.frameIndex++;
+    gl.uniform2f(
+      this.uniforms.output.noiseOffset,
+      Math.floor(((frame * R2_X) % 1) * BLUE_NOISE_SIZE),
+      Math.floor(((frame * R2_Y) % 1) * BLUE_NOISE_SIZE),
+    );
+    gl.uniform2fv(
+      this.uniforms.output.channelOffsets,
+      BLUE_NOISE_CHANNEL_OFFSETS,
+    );
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
@@ -1725,6 +1773,31 @@ export class Kawarp {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    return texture;
+  }
+
+  private createBlueNoiseTexture(): WebGLTexture {
+    const gl = this.gl;
+    const texture = gl.createTexture();
+    if (!texture) throw new Error("Failed to create texture");
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.R8,
+      BLUE_NOISE_SIZE,
+      BLUE_NOISE_SIZE,
+      0,
+      gl.RED,
+      gl.UNSIGNED_BYTE,
+      decodeBlueNoise(),
+    );
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
     return texture;
   }
 

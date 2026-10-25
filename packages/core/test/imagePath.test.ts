@@ -16,15 +16,16 @@ import {
 
 const RENDER_TIME = 1.25;
 
+// Dithering moved to blue noise, so the pipeline is compared undithered
 const OPTION_SETS: KawarpOptions[] = [
-  {},
+  { dithering: 0 },
   {
     warpIntensity: 0.6,
     blurPasses: 3,
     saturation: 1.2,
     tintColor: [0.3, 0.1, 0.4],
     tintIntensity: 0.4,
-    dithering: 0.02,
+    dithering: 0,
     scale: 1.3,
   },
 ];
@@ -62,8 +63,8 @@ describe("default image path matches the @kawarp/core 1.2.2 WebGL1 path within o
       instance.tintColor = [0.2, 0.5, 0.1];
       instance.saturation = 0.8;
     };
-    const current = renderImage(Kawarp, {}, configure);
-    const baseline = renderImage(BaselineKawarp, {}, configure);
+    const current = renderImage(Kawarp, { dithering: 0 }, configure);
+    const baseline = renderImage(BaselineKawarp, { dithering: 0 }, configure);
     expect(countDifferentBytes(current.data, baseline.data, 1)).toBe(0);
   });
 
@@ -72,8 +73,8 @@ describe("default image path matches the @kawarp/core 1.2.2 WebGL1 path within o
       instance.transitionDuration = 0;
       instance.loadImageElement(createSolidCanvas([30, 160, 220]));
     };
-    const current = renderImage(Kawarp, {}, configure);
-    const baseline = renderImage(BaselineKawarp, {}, configure);
+    const current = renderImage(Kawarp, { dithering: 0 }, configure);
+    const baseline = renderImage(BaselineKawarp, { dithering: 0 }, configure);
     expect(countDifferentBytes(current.data, baseline.data, 1)).toBe(0);
   });
 
@@ -97,8 +98,11 @@ describe("default image path matches the @kawarp/core 1.2.2 WebGL1 path within o
 
 describe("high-precision contexts", () => {
   it("renders the image path on WebGL2 within one step of the default path", () => {
-    const current = renderImage(Kawarp, { highPrecisionInput: true });
-    const baseline = renderImage(BaselineKawarp, {});
+    const current = renderImage(Kawarp, {
+      highPrecisionInput: true,
+      dithering: 0,
+    });
+    const baseline = renderImage(BaselineKawarp, { dithering: 0 });
     expect(countDifferentBytes(current.data, baseline.data, 1)).toBe(0);
   });
 
