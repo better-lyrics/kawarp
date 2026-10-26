@@ -752,9 +752,15 @@ export class Kawarp {
     let easedByRenderLoop = false;
     if (smoothing > 0) {
       const expectedMediaAdvance = (elapsedMs / 1000) * video.playbackRate;
+      // A live stream can't seek, and its media time drifts from the clock
+      // whenever frames drop, which would otherwise read as a seek
+      const isLiveStream =
+        typeof MediaStream !== "undefined" &&
+        video.srcObject instanceof MediaStream;
       const seeked =
+        !isLiveStream &&
         Math.abs(mediaTime - this.videoMediaTime - expectedMediaAdvance) >
-        VIDEO_SEEK_THRESHOLD_SECONDS;
+          VIDEO_SEEK_THRESHOLD_SECONDS;
       const snap =
         !this.hasVideoHistory ||
         !this.videoFrameShown ||
