@@ -15,7 +15,7 @@ import {
 // Offscreen passes keep row r of the target at texture y = (r + 0.5) / height,
 // matching WebGL, where framebuffers start at the bottom. Only the screen pass
 // flips, so the canvas shows row 0 at the bottom as the WebGL backend does.
-const VERTEX = /* wgsl */ `
+export const VERTEX = /* wgsl */ `
   struct VertexOutput {
     @builtin(position) position: vec4f,
     @location(0) uv: vec2f,
@@ -64,13 +64,13 @@ const BLEND = /* wgsl */ `
   struct Uniforms { amount: f32 };
   @group(0) @binding(0) var<uniform> u: Uniforms;
   @group(0) @binding(1) var linearSampler: sampler;
-  @group(0) @binding(2) var from: texture_2d<f32>;
-  @group(0) @binding(3) var to: texture_2d<f32>;
+  @group(0) @binding(2) var current: texture_2d<f32>;
+  @group(0) @binding(3) var next: texture_2d<f32>;
 
   @fragment fn fs(in: VertexOutput) -> @location(0) vec4f {
     return mix(
-      textureSample(from, linearSampler, in.uv),
-      textureSample(to, linearSampler, in.uv),
+      textureSample(current, linearSampler, in.uv),
+      textureSample(next, linearSampler, in.uv),
       u.amount,
     );
   }
@@ -255,7 +255,7 @@ type ShaderName =
   | "downsampleExternal"
   | "smoothing";
 
-const SHADERS: Record<ShaderName, string> = {
+export const SHADERS: Record<ShaderName, string> = {
   blur: KAWASE_BLUR,
   blend: BLEND,
   tint: TINT,

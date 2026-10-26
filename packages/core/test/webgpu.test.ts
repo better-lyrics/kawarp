@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { Kawarp, type KawarpOptions } from "../src/index";
+import { SHADERS, VERTEX } from "../src/webgpu";
 import {
   BACKEND,
   colorDistance,
@@ -52,6 +53,26 @@ afterEach(() => {
 });
 
 describe.skipIf(BACKEND !== "webgpu")("WebGPU backend", () => {
+  it("compiles every shader without errors", async () => {
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) throw new Error("No WebGPU adapter");
+    const device = await adapter.requestDevice();
+    try {
+      for (const [name, code] of Object.entries(SHADERS)) {
+        const module = device.createShaderModule({ code: VERTEX + code });
+        const { messages } = await module.getCompilationInfo();
+        expect(
+          messages
+            .filter((message) => message.type === "error")
+            .map((message) => message.message),
+          name,
+        ).toEqual([]);
+      }
+    } finally {
+      device.destroy();
+    }
+  });
+
   it("defaults to WebGL2", async () => {
     const instance = await Kawarp.create(createCanvas());
     instances.push(instance);

@@ -93,6 +93,21 @@ describe("default image path matches the @kawarp/core 1.2.2 WebGL1 path within o
     expect(countDifferentBytes(current.data, baseline.data, 1)).toBe(0);
   });
 
+  it("starts a crossfade identically when a second image replaces the first", async () => {
+    // Rendered right after the load, the crossfade still shows the first image
+    const configure = (instance: Kawarp | BaselineKawarp) => {
+      instance.transitionDuration = 60000;
+      instance.loadImageElement(createSolidCanvas([30, 160, 220]));
+    };
+    const current = await renderImage(Kawarp, { dithering: 0 }, configure);
+    const baseline = await renderImage(
+      BaselineKawarp,
+      { dithering: 0 },
+      configure,
+    );
+    expect(countDifferentBytes(current.data, baseline.data, 1)).toBe(0);
+  });
+
   it("keeps the getOptions shape", async () => {
     const current = await createInstance(createCanvas());
     const baseline = new BaselineKawarp(createCanvas());
