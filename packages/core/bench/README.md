@@ -13,12 +13,11 @@ WebGPU's `importExternalTexture` only avoids a copy when the browser decodes vid
 
 ## Results so far
 
-Linux, RTX 4070 Laptop, Chromium 153 headless with ANGLE on Vulkan, software VP9 decode, 1280×720 canvas. GPU-process CPU:
+Linux laptop (Intel Arc + RTX 4070), Google Chrome 156 on Wayland compositing on the Intel GPU with Vulkan on, 240 Hz display, software VP9 decode, 1280×720 canvas. GPU-process CPU:
 
-| Source | WebGL2 | WebGPU |
-|--------|--------|--------|
-| Still image | 7% | 14–16% |
-| 1080p60 video | 13–14% | 36–37% |
-| 2160p30 video | 16% | 32–33% |
+| Source | WebGL2 | WebGPU, low-power | WebGPU, high-performance |
+|--------|--------|-------------------|--------------------------|
+| Still image | 20% | 22% | 22% |
+| 1080p60 video | 22–24% | 34–37% | 40–49% |
 
-Frame rate held at 60 fps on both. Windows and macOS with hardware decode are not measured yet.
+`high-performance` puts WebGPU on the NVIDIA GPU while Chrome composites on Intel. Canvas frames then fail to import across GPUs and the console fills with invalid texture errors, which is why WebGPU defaults to `low-power`. Hardware decode, and Windows and macOS, are not measured yet.
