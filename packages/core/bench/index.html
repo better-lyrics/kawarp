@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kawarp backend benchmark</title>
+    <style>
+      body { margin: 0; background: #000; color: #ddd; font: 14px system-ui, sans-serif; }
+      canvas { display: block; width: 100vw; height: 100vh; }
+      form { position: fixed; top: 8px; left: 8px; display: flex; gap: 8px; align-items: center;
+        padding: 8px; background: #000c; border-radius: 6px; }
+      pre { position: fixed; bottom: 8px; left: 8px; margin: 0; padding: 8px; background: #000c; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <canvas></canvas>
+    <form>
+      <select name="backend">
+        <option value="webgl2">WebGL2</option>
+        <option value="webgpu">WebGPU</option>
+      </select>
+      <input name="video" type="file" accept="video/*" />
+      <button type="submit">Start</button>
+    </form>
+    <pre id="stats">Pick a backend and a video (or none for a still image), then Start.</pre>
+    <script type="module">
+      import { Kawarp } from "../dist/index.js";
+
+      let canvas = document.querySelector("canvas");
+      const form = document.querySelector("form");
+      const statsView = document.getElementById("stats");
+      let instance = null;
+      let statsTimer = 0;
+
+      const still = () => {
+        const art = document.createElement("canvas");
+        art.width = art.height = 512;
+        const context = art.getContext("2d");
+        const gradient = context.createLinearGradient(0, 0, 512, 512);
+        gradient.addColorStop(0, "#d9486b");
+        gradient.addColorStop(1, "#1b1f3a");
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, 512, 512);
+        return art;
+      };
+
+      // Main-thread time spent in Kawarp; GPU-process cost is in the browser's
+      // task manager (Chrome: Shift+Esc)
+      const timeMethod = (target, name, samples) => {
+        const original = target[name].bind(target);
+        target[name] = (...args) => {
+          const start = performance.now();
+          const result = original(...args);
+          samples.push(performance.now() - start);
+          return result;
+        };
+      };
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        instance?.dispose();
+        clearInterval(statsTimer);
+        // A canvas keeps its first context type, so start from a fresh one
+        const fresh = document.createElement("canvas");
+        canvas.replaceWith(fresh);
+        canvas = fresh;
+        fresh.width = Math.round(innerWidth * devicePixelRatio);
+        fresh.height = Math.round(innerHeight * devicePixelRatio);
+
+        const data = new FormData(form);
+        instance = await Kawarp.create(fresh, { backend: data.get("backend") });
+        const samples = { video: [], render: [] };
+        timeMethod(instance, "processVideoFrame", samples.video);
+        timeMethod(instance, "render", samples.render);
+
+        const file = data.get("video");
+        let video = null;
+        if (file?.size) {
+          video = document.createElement("video");
+          video.src = URL.createObjectURL(file);
+          video.muted = true;
+          video.loop = true;
+          await video.play();
+          instance.loadVideo(video);
+        } else {
+          instance.loadImageElement(still());
+        }
+        instance.start();
+
+        let frames = 0;
+        const countFrames = () => {
+          frames++;
+          if (instance) requestAnimationFrame(countFrames);
+        };
+        requestAnimationFrame(countFrames);
+        const mean = (values) =>
+          values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
+        statsTimer = setInterval(() => {
+          const quality = video?.getVideoPlaybackQuality();
+          statsView.textContent = [
+            `backend ${instance.backend}`,
+            `fps ${frames}`,
+            `video frame ${mean(samples.video).toFixed(3)} ms (${samples.video.length}/s)`,
+            `render ${mean(samples.render).toFixed(3)} ms`,
+            quality ? `dropped ${quality.droppedVideoFrames}` : "still image",
+          ].join("\n");
+          frames = 0;
+          samples.video.length = 0;
+          samples.render.length = 0;
+        }, 1000);
+      });
+    </script>
+  </body>
+</html>

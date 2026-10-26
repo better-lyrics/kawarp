@@ -1,15 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  Kawarp,
-  type KawarpContextOptions,
-  type KawarpOptions,
-} from "../src/index";
+import type { Kawarp, KawarpContextOptions, KawarpOptions } from "../src/index";
 import {
   centerPixel,
   colorDistance,
   createCanvas,
+  createInstance,
   createSolidCanvas,
   createVideoSource,
+  displayedCenterPixel,
+  disposeInstances,
   nextAnimationFrame,
   nextVideoFrames,
   paintSolid,
@@ -55,17 +54,21 @@ const createVideo = async (
   return source;
 };
 
-const createKawarp = (
+const createKawarp = async (
   options: KawarpOptions & KawarpContextOptions,
   canvas = createCanvas(),
 ) => {
-  const instance = new Kawarp(canvas, { ...COLOR_FAITHFUL, ...options });
+  const instance = await createInstance(canvas, {
+    ...COLOR_FAITHFUL,
+    ...options,
+  });
   instances.push(instance);
   return { instance, canvas };
 };
 
 afterEach(() => {
   for (const instance of instances.splice(0)) instance.dispose();
+  disposeInstances();
   for (const source of sources.splice(0)) source.dispose();
   document.body.replaceChildren();
 });
@@ -73,7 +76,7 @@ afterEach(() => {
 describe.each(CONTEXTS)("video source on %s", (_name, contextOptions) => {
   it("renders the current frame as soon as the video is loaded", async () => {
     const { video } = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp(contextOptions);
+    const { instance, canvas } = await createKawarp(contextOptions);
     instance.loadVideo(video);
     expect(colorDistance(centerPixel(canvas), CORAL)).toBeLessThan(
       DECODE_TOLERANCE,
@@ -82,7 +85,7 @@ describe.each(CONTEXTS)("video source on %s", (_name, contextOptions) => {
 
   it("follows new frames while playing", async () => {
     const source = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp(contextOptions);
+    const { instance, canvas } = await createKawarp(contextOptions);
     instance.loadVideo(source.video);
     instance.start();
     source.setPainter(paintSolid(TEAL));
@@ -94,7 +97,7 @@ describe.each(CONTEXTS)("video source on %s", (_name, contextOptions) => {
 
   it("keeps the video upright", async () => {
     const { video } = await createVideo(paintSplit(CORAL, BLUE));
-    const { instance, canvas } = createKawarp({
+    const { instance, canvas } = await createKawarp({
       ...contextOptions,
       blurPasses: 0,
     });
@@ -108,7 +111,7 @@ describe.each(CONTEXTS)("video source on %s", (_name, contextOptions) => {
 
   it("samples small videos without intermediate stages", async () => {
     const { video } = await createVideo(paintSolid(TEAL), 96, 54);
-    const { instance, canvas } = createKawarp(contextOptions);
+    const { instance, canvas } = await createKawarp(contextOptions);
     instance.loadVideo(video);
     expect(colorDistance(centerPixel(canvas), TEAL)).toBeLessThan(
       DECODE_TOLERANCE,
@@ -119,13 +122,13 @@ describe.each(CONTEXTS)("video source on %s", (_name, contextOptions) => {
 describe("video playback control", () => {
   it("ignores frames from a playing video while stopped, then catches up on start", async () => {
     const source = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.loadVideo(source.video);
     source.setPainter(paintSolid(TEAL));
     await settleVideo(source.video);
-    expect(colorDistance(centerPixel(canvas), CORAL)).toBeLessThan(
-      DECODE_TOLERANCE,
-    );
+    expect(
+      colorDistance(await displayedCenterPixel(canvas), CORAL),
+    ).toBeLessThan(DECODE_TOLERANCE);
 
     instance.start();
     await nextAnimationFrame();
@@ -137,7 +140,7 @@ describe("video playback control", () => {
 
   it("regression: limits the frame rate when the page clock is still small", async () => {
     const source = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     // Pick an interval just over half the page clock: a start slot of 0 used
     // to schedule the next sample in the past, letting the next frame through
     const frameRate = 1000 / (performance.now() / 1.9);
@@ -152,7 +155,7 @@ describe("video playback control", () => {
 
   it("limits sampling to the configured frame rate", async () => {
     const source = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.loadVideo(source.video, { frameRate: 0.5 });
     instance.start();
     source.setPainter(paintSolid(TEAL));
@@ -164,7 +167,7 @@ describe("video playback control", () => {
 
   it("updates options in place when called again with the same video", async () => {
     const source = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.loadVideo(source.video, { frameRate: 0.5 });
     instance.start();
     instance.loadVideo(source.video, { frameRate: 0 });
@@ -178,7 +181,7 @@ describe("video playback control", () => {
   it("switches to a second video", async () => {
     const first = await createVideo(paintSolid(CORAL));
     const second = await createVideo(paintSolid(BLUE));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.loadVideo(first.video);
     instance.loadVideo(second.video);
     first.setPainter(paintSolid(TEAL));
@@ -193,7 +196,7 @@ describe("video playback control", () => {
 describe.each(CONTEXTS)("temporal smoothing on %s", (_name, contextOptions) => {
   it("smooths color changes over the configured response time", async () => {
     const source = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp(contextOptions);
+    const { instance, canvas } = await createKawarp(contextOptions);
     instance.loadVideo(source.video, { smoothing: 5000 });
     instance.start();
     source.setPainter(paintSolid(TEAL));
@@ -207,7 +210,7 @@ describe.each(CONTEXTS)("temporal smoothing on %s", (_name, contextOptions) => {
 
   it("reaches the target color with a short response time", async () => {
     const source = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp(contextOptions);
+    const { instance, canvas } = await createKawarp(contextOptions);
     instance.loadVideo(source.video, { smoothing: 150 });
     instance.start();
     source.setPainter(paintSolid(TEAL));
@@ -220,7 +223,7 @@ describe.each(CONTEXTS)("temporal smoothing on %s", (_name, contextOptions) => {
 
   it("regression: keeps easing toward the latest frame between video frames", async () => {
     const source = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp(contextOptions);
+    const { instance, canvas } = await createKawarp(contextOptions);
     instance.loadVideo(source.video, { smoothing: 2000, frameRate: 1 });
     instance.start();
     await new Promise((resolve) => setTimeout(resolve, 1200));
@@ -240,13 +243,13 @@ describe.each(CONTEXTS)("temporal smoothing on %s", (_name, contextOptions) => {
 
   it("holds a steady color once easing has settled on an unchanging video", async () => {
     const source = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp(contextOptions);
+    const { instance, canvas } = await createKawarp(contextOptions);
     instance.loadVideo(source.video, { smoothing: 100 });
     instance.start();
     source.setPainter(paintSolid(TEAL));
     await new Promise((resolve) => setTimeout(resolve, 1500));
 
-    const settled = centerPixel(canvas);
+    const settled = await displayedCenterPixel(canvas);
     for (let frame = 0; frame < 20; frame++) {
       await nextAnimationFrame();
       expect(centerPixel(canvas)).toEqual(settled);
@@ -258,7 +261,7 @@ describe.each(CONTEXTS)("temporal smoothing on %s", (_name, contextOptions) => {
 describe("unloading and replacing video", () => {
   it("keeps the last frame after unloadVideo", async () => {
     const source = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.loadVideo(source.video);
     instance.unloadVideo();
     source.setPainter(paintSolid(TEAL));
@@ -271,7 +274,7 @@ describe("unloading and replacing video", () => {
 
   it("re-blurs the retained frame after unloadVideo", async () => {
     const { video } = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.loadVideo(video);
     instance.unloadVideo();
     instance.blurPasses = 2;
@@ -283,7 +286,7 @@ describe("unloading and replacing video", () => {
 
   it("replaces the video when an image loads", async () => {
     const source = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.loadVideo(source.video);
     instance.start();
     instance.loadImageElement(createSolidCanvas(BLUE));
@@ -294,7 +297,7 @@ describe("unloading and replacing video", () => {
 
   it("drops an image load that finishes after a later loadVideo", async () => {
     const { video } = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     const blob = await new Promise<Blob>((resolve, reject) =>
       createSolidCanvas(BLUE).toBlob((result) =>
         result ? resolve(result) : reject(new Error("toBlob failed")),
@@ -310,7 +313,7 @@ describe("unloading and replacing video", () => {
   });
 
   it("shows an image load as a poster until the video has a frame", async () => {
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     const blob = await new Promise<Blob>((resolve, reject) =>
       createSolidCanvas(BLUE).toBlob((result) =>
         result ? resolve(result) : reject(new Error("toBlob failed")),
@@ -325,7 +328,7 @@ describe("unloading and replacing video", () => {
 
   it("shows an image loaded after loadVideo even if the first frame lands mid-load", async () => {
     const source = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.start();
     const lateVideo = document.createElement("video");
     lateVideo.muted = true;
@@ -357,7 +360,7 @@ describe("unloading and replacing video", () => {
 
   it("regression: never draws a black frame when the first video frame arrives with a zero transition", async () => {
     const source = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.loadImageElement(createSolidCanvas(BLUE));
     instance.start();
     const lateVideo = document.createElement("video");
@@ -377,7 +380,7 @@ describe("unloading and replacing video", () => {
 
   it("shows an image as the poster of a newer video after an older video's frame appeared mid-load", async () => {
     const source = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.start();
     const olderVideo = document.createElement("video");
     olderVideo.muted = true;
@@ -407,7 +410,7 @@ describe("unloading and replacing video", () => {
   it("shows a paused video's first frame on a stopped instance without waiting for a crossfade", async () => {
     const source = await createVideo(paintSolid(CORAL));
     source.video.pause();
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.loadImageElement(createSolidCanvas(BLUE));
     instance.transitionDuration = 5000;
     instance.loadVideo(source.video);
@@ -417,7 +420,7 @@ describe("unloading and replacing video", () => {
   });
 
   it("keeps an in-flight image when the video is unloaded before its first frame", async () => {
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     const blob = await new Promise<Blob>((resolve, reject) =>
       createSolidCanvas(BLUE).toBlob((result) =>
         result ? resolve(result) : reject(new Error("toBlob failed")),
@@ -433,7 +436,7 @@ describe("unloading and replacing video", () => {
 
   it("crossfades from the current image to the first video frame", async () => {
     const { video } = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.loadImageElement(createSolidCanvas(BLUE));
     instance.transitionDuration = 60000;
     instance.start();
@@ -447,23 +450,23 @@ describe("unloading and replacing video", () => {
 
   it("stops following the video after dispose", async () => {
     const source = await createVideo(paintSolid(CORAL));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.loadVideo(source.video);
     instance.start();
     instance.dispose();
     source.setPainter(paintSolid(TEAL));
     await nextVideoFrames(source.video, 4);
     await nextAnimationFrame();
-    expect(colorDistance(centerPixel(canvas), CORAL)).toBeLessThan(
-      DECODE_TOLERANCE,
-    );
+    expect(
+      colorDistance(await displayedCenterPixel(canvas), CORAL),
+    ).toBeLessThan(DECODE_TOLERANCE);
   });
 });
 
 describe("video option validation", () => {
   it("falls back to defaults for non-finite options", async () => {
     const { video } = await createVideo(paintSolid(TEAL));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.loadVideo(video, {
       sampleWidth: Number.NaN,
       sampleHeight: Number.POSITIVE_INFINITY,
@@ -483,7 +486,7 @@ describe("video option validation", () => {
     [128, 1, 1.5],
   ])("terminates staged downsampling for a %ix%i sample with factor %f", async (sampleWidth, sampleHeight, downsampleFactor) => {
     const { video } = await createVideo(paintSolid(TEAL));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.loadVideo(video, {
       sampleWidth,
       sampleHeight,
@@ -496,7 +499,7 @@ describe("video option validation", () => {
 
   it("clamps out-of-range sample sizes", async () => {
     const { video } = await createVideo(paintSolid(TEAL));
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.loadVideo(video, {
       sampleWidth: -20,
       sampleHeight: 1e9,
@@ -507,8 +510,8 @@ describe("video option validation", () => {
     );
   });
 
-  it("throws when requestVideoFrameCallback is unavailable", () => {
-    const { instance } = createKawarp({});
+  it("throws when requestVideoFrameCallback is unavailable", async () => {
+    const { instance } = await createKawarp({});
     const video = document.createElement("video");
     Object.defineProperty(video, "requestVideoFrameCallback", {
       value: undefined,
@@ -519,7 +522,7 @@ describe("video option validation", () => {
   });
 
   it("does nothing for a video without decoded data", async () => {
-    const { instance, canvas } = createKawarp({});
+    const { instance, canvas } = await createKawarp({});
     instance.loadImageElement(createSolidCanvas(BLUE));
     instance.loadVideo(document.createElement("video"));
     instance.renderFrame(1);

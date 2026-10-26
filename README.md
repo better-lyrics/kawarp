@@ -6,11 +6,11 @@
 [![npm downloads](https://img.shields.io/npm/dm/@kawarp/core?style=flat&colorA=18181B&colorB=28CF8D)](https://www.npmjs.com/package/@kawarp/core)
 [![License](https://img.shields.io/github/license/better-lyrics/kawarp?style=flat&colorA=18181B&colorB=28CF8D)](./LICENSE)
 
-Fluid animated background renderer using WebGL2, Kawase blur, and domain warping. Creates effects similar to Apple Music's album art visualization. Zero dependencies.
+Fluid animated background renderer using WebGL2 or WebGPU, Kawase blur, and domain warping. Creates effects similar to Apple Music's album art visualization. Zero dependencies.
 
 ## Packages
 
-- **[@kawarp/core](./packages/core)** - Pure TypeScript WebGL2 renderer
+- **[@kawarp/core](./packages/core)** - Pure TypeScript WebGL2 and WebGPU renderer
 - **[@kawarp/react](./packages/react)** - React component wrapper
 
 ## Ports
@@ -80,7 +80,7 @@ function App() {
 - `start()` - Start animation
 - `stop()` - Stop animation
 - `resize()` - Update canvas dimensions
-- `dispose()` - Clean up WebGL resources
+- `dispose()` - Clean up GPU resources
 
 ## Video
 
@@ -118,6 +118,27 @@ Video renders upright. Still images keep the vertically flipped orientation Kawa
 ```javascript
 const pixels = await kawarp.sampleSource(16);
 ```
+
+## Backends
+
+`new Kawarp(canvas, options)` always renders with WebGL2. `Kawarp.create(canvas, options)` resolves to an instance on the API named by `backend`:
+
+| `backend` | Behavior |
+|-----------|----------|
+| `"webgl2"` (default) | WebGL2 |
+| `"webgpu"` | WebGPU, rejecting when it's unavailable |
+| `"auto"` | WebGPU when available, otherwise WebGL2 |
+
+```javascript
+const kawarp = await Kawarp.create(canvas, { backend: "auto" });
+console.log(kawarp.backend); // "webgpu" or "webgl2"
+```
+
+Both backends render the same image. WebGPU imports video frames with `importExternalTexture` instead of copying them, which should help when the browser decodes video on the GPU. On Linux with software decoding it costs more GPU-process CPU than WebGL2, so it stays opt-in until it's measured elsewhere; see [bench/README.md](packages/core/bench/README.md).
+
+WebGPU asks for the `"low-power"` adapter unless `powerPreference: "high-performance"` is passed. On hybrid laptops the display runs on the low-power GPU, and rendering on the other one means sharing every frame across GPUs: slower, and on Linux it can fail outright.
+
+A canvas keeps the first context type it was given, so a canvas used by one backend can't be reused by the other.
 
 ## High Precision
 
