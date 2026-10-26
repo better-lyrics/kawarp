@@ -44,6 +44,13 @@ export interface KawarpCreateOptions {
    * unavailable; "auto" tries WebGPU and falls back to WebGL2.
    */
   backend?: "auto" | RendererBackend;
+  /**
+   * WebGPU adapter (default "low-power"). Canvases are composited on the GPU
+   * driving the display, which on hybrid laptops is the low-power one; an
+   * adapter on the other GPU has to share every frame across GPUs, which is
+   * slower and can fail outright.
+   */
+  powerPreference?: "low-power" | "high-performance";
 }
 
 export interface KawarpVideoOptions {
@@ -221,7 +228,10 @@ export class Kawarp {
   ): Promise<Kawarp> {
     const backend = options.backend ?? "webgl2";
     if (backend !== "webgl2") {
-      const renderer = await WebGPURenderer.create(canvas).catch(() => null);
+      const renderer = await WebGPURenderer.create(
+        canvas,
+        options.powerPreference,
+      ).catch(() => null);
       if (renderer) {
         injectedRenderer = renderer;
         try {

@@ -136,6 +136,8 @@ console.log(kawarp.backend); // "webgpu" or "webgl2"
 
 Both backends render the same image. WebGPU imports video frames with `importExternalTexture` instead of copying them, which should help when the browser decodes video on the GPU. On Linux with software decoding it costs more GPU-process CPU than WebGL2, so it stays opt-in until it's measured elsewhere; see [bench/README.md](packages/core/bench/README.md).
 
+WebGPU asks for the `"low-power"` adapter unless `powerPreference: "high-performance"` is passed. On hybrid laptops the display runs on the low-power GPU, and rendering on the other one means sharing every frame across GPUs: slower, and on Linux it can fail outright.
+
 A canvas keeps the first context type it was given, so a canvas used by one backend can't be reused by the other.
 
 ## High Precision

@@ -328,12 +328,11 @@ export class WebGPURenderer implements Renderer {
    */
   static async create(
     canvas: HTMLCanvasElement,
+    powerPreference: GPUPowerPreference = "low-power",
   ): Promise<WebGPURenderer | null> {
     const gpu = typeof navigator !== "undefined" ? navigator.gpu : undefined;
     if (!gpu) return null;
-    const adapter = await gpu.requestAdapter({
-      powerPreference: "high-performance",
-    });
+    const adapter = await gpu.requestAdapter({ powerPreference });
     if (!adapter) return null;
     const float32Filterable = adapter.features.has("float32-filterable");
     const device = await adapter.requestDevice({
