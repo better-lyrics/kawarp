@@ -84,6 +84,18 @@ Video renders upright. Still images keep the vertically flipped orientation Kawa
 const pixels = await kawarp.sampleSource(16);
 ```
 
+## Still Frames Without WebGL
+
+`@kawarp/core/frame` renders one frame on the CPU, for servers and build steps. It takes RGBA pixels of any size and returns `outWidth` x `outHeight` RGBA pixels, top row first, within 2 of 255 per channel (on average) of what `renderFrame(time)` draws.
+
+```javascript
+import { frame } from "@kawarp/core/frame";
+
+const pixels = frame(rgba, width, height, 1200, 630, { warpIntensity: 0.9, saturation: 1.4, time: 12 });
+```
+
+Options: `warpIntensity`, `blurPasses`, `saturation` and `time` (12 by default). Tint and dithering use the renderer's defaults.
+
 ## High Precision
 
 Two creation-only options opt into WebGL2. Without them Kawarp uses the same WebGL1 pipeline as before.
