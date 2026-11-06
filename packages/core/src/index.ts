@@ -12,6 +12,8 @@
  * - Robust CORS and blob/imageBitmap loading
  */
 
+import { BLUR_SIZE, DEFAULTS, LIMITS } from "./defaults.js";
+
 export interface KawarpOptions {
   warpIntensity?: number;
   blurPasses?: number;
@@ -52,9 +54,6 @@ interface Framebuffer {
   width: number;
   height: number;
 }
-
-// Size for blur operations (small = fast)
-const BLUR_SIZE = 128;
 
 const DEFAULT_VIDEO_OPTIONS = {
   sampleWidth: 128,
@@ -502,15 +501,15 @@ export class Kawarp {
       );
     }
 
-    this._warpIntensity = options.warpIntensity ?? 1.0;
-    this._blurPasses = options.blurPasses ?? 8;
+    this._warpIntensity = options.warpIntensity ?? DEFAULTS.warpIntensity;
+    this._blurPasses = options.blurPasses ?? DEFAULTS.blurPasses;
     this._animationSpeed = options.animationSpeed ?? 1.0;
     this._targetAnimationSpeed = this._animationSpeed;
     this._transitionDuration = options.transitionDuration ?? 1000;
-    this._saturation = options.saturation ?? 1.5;
-    this._tintColor = options.tintColor ?? [0.157, 0.157, 0.235];
-    this._tintIntensity = options.tintIntensity ?? 0.15;
-    this._dithering = options.dithering ?? 0.008;
+    this._saturation = options.saturation ?? DEFAULTS.saturation;
+    this._tintColor = [...(options.tintColor ?? DEFAULTS.tintColor)];
+    this._tintIntensity = options.tintIntensity ?? DEFAULTS.tintIntensity;
+    this._dithering = options.dithering ?? DEFAULTS.dithering;
     this._scale = options.scale ?? 1.0;
 
     // Create shader programs
@@ -603,14 +602,14 @@ export class Kawarp {
     return this._warpIntensity;
   }
   set warpIntensity(value: number) {
-    this._warpIntensity = Math.max(0, Math.min(1, value));
+    this._warpIntensity = LIMITS.warpIntensity(value);
   }
 
   get blurPasses(): number {
     return this._blurPasses;
   }
   set blurPasses(value: number) {
-    const newValue = Math.max(0, Math.min(40, Math.floor(value)));
+    const newValue = LIMITS.blurPasses(value);
     if (newValue !== this._blurPasses) {
       this._blurPasses = newValue;
       // Re-blur with new pass count if we have an image
@@ -638,18 +637,14 @@ export class Kawarp {
     return this._saturation;
   }
   set saturation(value: number) {
-    this._saturation = Math.max(0, Math.min(3, value));
+    this._saturation = LIMITS.saturation(value);
   }
 
   get tintColor(): [number, number, number] {
     return this._tintColor;
   }
   set tintColor(value: [number, number, number]) {
-    const newValue = value.map((v) => Math.max(0, Math.min(1, v))) as [
-      number,
-      number,
-      number,
-    ];
+    const newValue = LIMITS.tintColor(value);
     const changed = newValue.some((v, i) => v !== this._tintColor[i]);
     if (changed) {
       this._tintColor = newValue;
@@ -663,7 +658,7 @@ export class Kawarp {
     return this._tintIntensity;
   }
   set tintIntensity(value: number) {
-    const newValue = Math.max(0, Math.min(1, value));
+    const newValue = LIMITS.tintIntensity(value);
     if (newValue !== this._tintIntensity) {
       this._tintIntensity = newValue;
       if (this.hasImage) {
@@ -676,7 +671,7 @@ export class Kawarp {
     return this._dithering;
   }
   set dithering(value: number) {
-    this._dithering = Math.max(0, Math.min(0.1, value));
+    this._dithering = LIMITS.dithering(value);
   }
 
   get scale(): number {

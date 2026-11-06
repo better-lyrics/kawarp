@@ -95,6 +95,22 @@ function App() {
 | `highPrecisionInput` | boolean | false | Float32 color history for smoothed video, read on mount only |
 | `highPrecisionOutput` | boolean | false | Float16 drawing buffer, read on mount only |
 
+## Still Frames Without WebGL
+
+Server code imports this from `@kawarp/core`, not from `@kawarp/react`.
+
+`@kawarp/core/frame` draws one frame on the CPU, for servers and build steps that have no WebGL. Pass it RGBA pixels of any size and it returns `outWidth` x `outHeight` RGBA pixels, top row first. On average each channel lands within 2 of 255 of what `renderFrame(time)` draws, and like `renderFrame` on a still image, the picture comes out upside down.
+
+```javascript
+import { frame } from "@kawarp/core/frame";
+
+const pixels = frame(rgba, width, height, 1200, 630, { warpIntensity: 0.9, saturation: 1.4, time: 12 });
+```
+
+It takes the same `warpIntensity`, `blurPasses`, `saturation`, `tintColor`, `tintIntensity` and `dithering` options as `Kawarp`, with the same defaults and limits, plus `time` (12 by default).
+
+Alpha is dropped, so flatten a transparent image onto a background first. Sizes must be positive integers and `rgba` must hold `width * height * 4` bytes, or it throws a `RangeError`. With sharp, call `.ensureAlpha()` before `.raw()`.
+
 ## License
 
 MIT
