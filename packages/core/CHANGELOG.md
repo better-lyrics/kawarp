@@ -1,5 +1,11 @@
 # @kawarp/core
 
+## 1.4.0
+
+### Minor Changes
+
+- 84793de: Add `@kawarp/core/frame` to draw one still frame on the CPU from RGBA pixels, for servers and build steps that have no WebGL.
+
 ## 1.3.1
 
 ### Patch Changes

@@ -1,5 +1,12 @@
 # @kawarp/react
 
+## 1.4.0
+
+### Patch Changes
+
+- Updated dependencies [84793de]
+  - @kawarp/core@1.4.0
+
 ## 1.3.1
 
 ### Patch Changes
