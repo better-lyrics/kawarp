@@ -94,7 +94,7 @@ import { frame } from "@kawarp/core/frame";
 const pixels = frame(rgba, width, height, 1200, 630, { warpIntensity: 0.9, saturation: 1.4, time: 12 });
 ```
 
-Options: `warpIntensity`, `blurPasses`, `saturation` and `time` (12 by default). Tint and dithering use the renderer's defaults.
+It takes the same `warpIntensity`, `blurPasses`, `saturation`, `tintColor`, `tintIntensity` and `dithering` options as `Kawarp`, with the same defaults, plus `time` (12 by default).
 
 ## High Precision
 

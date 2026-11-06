@@ -1,18 +1,18 @@
-export interface FrameOptions {
-  /** Warp strength (default: 1) */
-  warpIntensity?: number;
-  /** Kawase blur passes (default: 8) */
-  blurPasses?: number;
-  /** Output saturation (default: 1.5) */
-  saturation?: number;
+import { BLUR_SIZE, DEFAULTS } from "./defaults.js";
+import type { KawarpOptions } from "./index.js";
+
+export type FrameOptions = Pick<
+  KawarpOptions,
+  | "warpIntensity"
+  | "blurPasses"
+  | "saturation"
+  | "tintColor"
+  | "tintIntensity"
+  | "dithering"
+> & {
   /** Animation time in seconds, as passed to `renderFrame` (default: 12) */
   time?: number;
-}
-
-const BLUR_SIZE = 128;
-const TINT: [number, number, number] = [0.157, 0.157, 0.235];
-const TINT_INTENSITY = 0.15;
-const DITHERING = 0.008;
+};
 
 interface Texture {
   width: number;
@@ -53,7 +53,11 @@ function fromRgba(
   return { width, height, data };
 }
 
-function tintedBlurSource(source: Texture): Texture {
+function tintedBlurSource(
+  source: Texture,
+  tint: [number, number, number],
+  intensity: number,
+): Texture {
   const data = new Float32Array(BLUR_SIZE * BLUR_SIZE * 3);
   const color = new Float32Array(3);
   for (let y = 0; y < BLUR_SIZE; y++) {
@@ -61,10 +65,10 @@ function tintedBlurSource(source: Texture): Texture {
       sample(source, (x + 0.5) / BLUR_SIZE, (y + 0.5) / BLUR_SIZE, color);
       const luma = color[0]! * 0.299 + color[1]! * 0.587 + color[2]! * 0.114;
       const t = Math.min(Math.max(luma / 0.5, 0), 1);
-      const dark = (1 - t * t * (3 - 2 * t)) * TINT_INTENSITY;
+      const dark = (1 - t * t * (3 - 2 * t)) * intensity;
       const i = (y * BLUR_SIZE + x) * 3;
       for (let c = 0; c < 3; c++)
-        data[i + c] = color[c]! + (TINT[c]! - color[c]!) * dark;
+        data[i + c] = color[c]! + (tint[c]! - color[c]!) * dark;
     }
   }
   return { width: BLUR_SIZE, height: BLUR_SIZE, data };
@@ -171,12 +175,17 @@ export function frame(
   outHeight: number,
   options: FrameOptions = {},
 ): Uint8Array {
-  const warpIntensity = options.warpIntensity ?? 1;
-  const blurPasses = options.blurPasses ?? 8;
-  const saturation = options.saturation ?? 1.5;
+  const warpIntensity = options.warpIntensity ?? DEFAULTS.warpIntensity;
+  const blurPasses = options.blurPasses ?? DEFAULTS.blurPasses;
+  const saturation = options.saturation ?? DEFAULTS.saturation;
+  const dithering = options.dithering ?? DEFAULTS.dithering;
   const time = options.time ?? 12;
 
-  let tex = tintedBlurSource(fromRgba(rgba, width, height));
+  let tex = tintedBlurSource(
+    fromRgba(rgba, width, height),
+    options.tintColor ?? DEFAULTS.tintColor,
+    options.tintIntensity ?? DEFAULTS.tintIntensity,
+  );
   for (let i = 0; i < blurPasses; i++) tex = kawase(tex, i + 0.5);
 
   const out = new Uint8Array(outWidth * outHeight * 4);
@@ -209,7 +218,7 @@ export function frame(
       const vignette = 1 - (cx * cx + cy * cy) * 0.3;
       const gray =
         (color[0]! * 0.299 + color[1]! * 0.587 + color[2]! * 0.114) * vignette;
-      const dither = (hash(x, yb, Math.floor(time * 60)) - 0.5) * DITHERING;
+      const dither = (hash(x, yb, Math.floor(time * 60)) - 0.5) * dithering;
       const i = (row * outWidth + x) * 4;
       for (let c = 0; c < 3; c++) {
         const value =

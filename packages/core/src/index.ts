@@ -12,6 +12,8 @@
  * - Robust CORS and blob/imageBitmap loading
  */
 
+import { BLUR_SIZE, DEFAULTS } from "./defaults.js";
+
 export interface KawarpOptions {
   warpIntensity?: number;
   blurPasses?: number;
@@ -52,9 +54,6 @@ interface Framebuffer {
   width: number;
   height: number;
 }
-
-// Size for blur operations (small = fast)
-const BLUR_SIZE = 128;
 
 const DEFAULT_VIDEO_OPTIONS = {
   sampleWidth: 128,
@@ -502,15 +501,15 @@ export class Kawarp {
       );
     }
 
-    this._warpIntensity = options.warpIntensity ?? 1.0;
-    this._blurPasses = options.blurPasses ?? 8;
+    this._warpIntensity = options.warpIntensity ?? DEFAULTS.warpIntensity;
+    this._blurPasses = options.blurPasses ?? DEFAULTS.blurPasses;
     this._animationSpeed = options.animationSpeed ?? 1.0;
     this._targetAnimationSpeed = this._animationSpeed;
     this._transitionDuration = options.transitionDuration ?? 1000;
-    this._saturation = options.saturation ?? 1.5;
-    this._tintColor = options.tintColor ?? [0.157, 0.157, 0.235];
-    this._tintIntensity = options.tintIntensity ?? 0.15;
-    this._dithering = options.dithering ?? 0.008;
+    this._saturation = options.saturation ?? DEFAULTS.saturation;
+    this._tintColor = options.tintColor ?? DEFAULTS.tintColor;
+    this._tintIntensity = options.tintIntensity ?? DEFAULTS.tintIntensity;
+    this._dithering = options.dithering ?? DEFAULTS.dithering;
     this._scale = options.scale ?? 1.0;
 
     // Create shader programs
