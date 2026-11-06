@@ -121,7 +121,7 @@ const pixels = await kawarp.sampleSource(16);
 
 ## Still Frames Without WebGL
 
-`@kawarp/core/frame` renders one frame on the CPU, for servers and build steps. It takes opaque RGBA pixels of any size (flatten a transparent image first; alpha is dropped) and returns `outWidth` x `outHeight` opaque RGBA pixels, top row first, within 2 of 255 per channel (on average) of what `renderFrame(time)` draws. Like `renderFrame` on a still image, the picture comes out vertically flipped. Sizes must be positive integers and `rgba` must hold `width * height * 4` bytes, or it throws a `RangeError` (sharp's `.raw()` needs `.ensureAlpha()`).
+`@kawarp/core/frame` draws one frame on the CPU, for servers and build steps that have no WebGL. Pass it RGBA pixels of any size and it returns `outWidth` x `outHeight` RGBA pixels, top row first. On average each channel lands within 2 of 255 of what `renderFrame(time)` draws, and like `renderFrame` on a still image, the picture comes out upside down.
 
 ```javascript
 import { frame } from "@kawarp/core/frame";
@@ -130,6 +130,8 @@ const pixels = frame(rgba, width, height, 1200, 630, { warpIntensity: 0.9, satur
 ```
 
 It takes the same `warpIntensity`, `blurPasses`, `saturation`, `tintColor`, `tintIntensity` and `dithering` options as `Kawarp`, with the same defaults and limits, plus `time` (12 by default).
+
+Alpha is dropped, so flatten a transparent image onto a background first. Sizes must be positive integers and `rgba` must hold `width * height * 4` bytes, or it throws a `RangeError`. With sharp, call `.ensureAlpha()` before `.raw()`.
 
 ## High Precision
 

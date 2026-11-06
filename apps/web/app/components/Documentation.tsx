@@ -102,7 +102,7 @@ kawarp.start();`;
 
 const FRAME_CODE = `import { frame } from '@kawarp/core/frame';
 
-// RGBA pixels in, RGBA pixels out, no WebGL needed
+// RGBA pixels in, RGBA pixels out
 const pixels = frame(rgba, width, height, 1200, 630, {
   warpIntensity: 0.9,
   saturation: 1.4,
@@ -313,8 +313,8 @@ export function Documentation() {
               <code className="font-mono text-zinc-300">
                 @kawarp/core/frame
               </code>{" "}
-              renders one frame on the CPU for servers and build steps, matching
-              the output of{" "}
+              draws one frame on the CPU, for servers and build steps that have
+              no WebGL. The output matches{" "}
               <code className="font-mono text-zinc-300">renderFrame(time)</code>
               .
             </p>
