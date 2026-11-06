@@ -100,6 +100,15 @@ const kawarp = new Kawarp(canvas);
 await kawarp.loadImage('path/to/image.jpg');
 kawarp.start();`;
 
+const FRAME_CODE = `import { frame } from '@kawarp/core/frame';
+
+// RGBA pixels in, RGBA pixels out, no WebGL needed
+const pixels = frame(rgba, width, height, 1200, 630, {
+  warpIntensity: 0.9,
+  saturation: 1.4,
+  time: 12,
+});`;
+
 const REACT_BASIC_CODE = `import { Kawarp } from '@kawarp/react';
 
 function App() {
@@ -294,6 +303,22 @@ export function Documentation() {
                 </div>
               ))}
             </div>
+          </div>
+
+          <div>
+            <h3 className="mb-4 text-lg font-medium text-white">
+              Still frames without WebGL
+            </h3>
+            <p className="mb-4 text-sm text-zinc-500">
+              <code className="font-mono text-zinc-300">
+                @kawarp/core/frame
+              </code>{" "}
+              renders one frame on the CPU for servers and build steps, matching
+              the output of{" "}
+              <code className="font-mono text-zinc-300">renderFrame(time)</code>
+              .
+            </p>
+            <CodeBlock code={FRAME_CODE} />
           </div>
 
           <div className="border-t border-white/10 pt-12">
